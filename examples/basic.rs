@@ -1,6 +1,9 @@
 use bevy::prelude::*;
-use bevy_third_person_camera::{Offset, ThirdPersonCamera, ThirdPersonCameraPlugin, ThirdPersonCameraTarget, Zoom};
+use bevy_third_person_camera::{
+    Offset, ThirdPersonCamera, ThirdPersonCameraPlugin, ThirdPersonCameraTarget, Zoom,
+};
 use space::movement::MovementPlugin;
+use space::reticule::ReticulePlugin;
 use space::utils::generate_targets;
 
 #[derive(Component)]
@@ -10,7 +13,9 @@ fn main() {
     App::new()
         .add_plugins(DefaultPlugins)
         .add_plugins(ThirdPersonCameraPlugin)
+        .add_plugins(ReticulePlugin)
         .add_plugins(MovementPlugin)
+        .insert_resource(ClearColor(Color::BLACK))
         .insert_resource(AmbientLight {
             color: Color::WHITE,
             brightness: 10.0,
@@ -22,9 +27,7 @@ fn main() {
         .run();
 }
 
-fn spawn_camera(
-    mut commands: Commands,
-) {
+fn spawn_camera(mut commands: Commands) {
     commands.spawn((
         ThirdPersonCamera {
             offset_enabled: true,
@@ -32,7 +35,7 @@ fn spawn_camera(
             zoom: Zoom::new(0.2, 10.0),
             ..default()
         },
-        Camera3d::default()
+        Camera3d::default(),
     ));
 }
 
@@ -41,7 +44,6 @@ fn spawn_player(
     assets: Res<AssetServer>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-
     let material_handle = materials.add(StandardMaterial {
         base_color: Color::BLACK,
         reflectance: 1.0,
@@ -54,7 +56,6 @@ fn spawn_player(
         Transform::from_scale(Vec3::new(0.1, 0.1, 0.5)),
         ThirdPersonCameraTarget,
     ));
-
 }
 
 fn spawn_targets(
@@ -62,9 +63,7 @@ fn spawn_targets(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-
     let mut spawn_cube = |position, color, name| {
-
         let material = materials.add(StandardMaterial {
             base_color: color,
             reflectance: 0.02,
@@ -84,14 +83,17 @@ fn spawn_targets(
     for (position, color, name) in generate_targets(50) {
         spawn_cube(position, color, name);
     }
-
 }
 
 fn spawn_lights(mut commands: Commands) {
-    commands.spawn(
+    let theta = std::f32::consts::FRAC_PI_4;
+    let light_transform = Mat4::from_euler(EulerRot::ZYX, 0.0, std::f32::consts::FRAC_PI_2, -theta);
+    commands.spawn((
         DirectionalLight {
+            illuminance: 9_999.0,
             shadows_enabled: true,
             ..default()
-        }
-    );
+        },
+        Transform::from_matrix(light_transform),
+    ));
 }

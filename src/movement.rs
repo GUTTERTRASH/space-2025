@@ -1,13 +1,12 @@
-use std::ops::Deref;
 use bevy::prelude::*;
 use bevy_third_person_camera::{ThirdPersonCamera, ThirdPersonCameraTarget};
+use std::ops::Deref;
 
 pub struct MovementPlugin;
 
 impl Plugin for MovementPlugin {
     fn build(&self, app: &mut App) {
-        app
-            .add_event::<TranslationEvent>()
+        app.add_event::<TranslationEvent>()
             .add_event::<RotationEvent>()
             .add_systems(PreUpdate, move_player)
             .add_systems(Update, translate_player)
@@ -24,7 +23,6 @@ fn move_player(
     mut translations: EventWriter<TranslationEvent>,
     mut rotations: EventWriter<RotationEvent>,
 ) {
-
     if keys.any_pressed([
         KeyCode::KeyW,
         KeyCode::KeyA,
@@ -33,8 +31,9 @@ fn move_player(
         KeyCode::KeyQ,
         KeyCode::KeyE,
     ]) {
-
-        let Ok(camera_transform) = camera_query.get_single_mut() else { return };
+        let Ok(camera_transform) = camera_query.get_single_mut() else {
+            return;
+        };
 
         let xz = Vec3::new(1.0, 0.0, 1.0);
         let (forward, right, up) = (
@@ -81,9 +80,7 @@ fn move_player(
         }
 
         translations.send(TranslationEvent::new(&desired_velocity));
-
     }
-
 }
 
 #[derive(Event, Debug, Default)]
@@ -135,13 +132,14 @@ impl Deref for RotationEvent {
     }
 }
 
-
 fn rotate_player(
     time: Res<Time>,
     mut events: EventReader<RotationEvent>,
     mut player_query: Query<&mut Transform, With<ThirdPersonCameraTarget>>,
 ) {
-    let Ok(mut player_transform) = player_query.get_single_mut() else { return };
+    let Ok(mut player_transform) = player_query.get_single_mut() else {
+        return;
+    };
     for event in events.read() {
         player_transform.rotation = player_transform
             .rotation
