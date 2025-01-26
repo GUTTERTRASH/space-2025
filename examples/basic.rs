@@ -1,6 +1,7 @@
 use bevy::prelude::*;
-use bevy_third_person_camera::{ThirdPersonCamera, ThirdPersonCameraPlugin, ThirdPersonCameraTarget};
+use bevy_third_person_camera::{Offset, ThirdPersonCamera, ThirdPersonCameraPlugin, ThirdPersonCameraTarget, Zoom};
 use space::movement::MovementPlugin;
+use space::utils::generate_targets;
 
 #[derive(Component)]
 struct Target;
@@ -25,7 +26,12 @@ fn spawn_camera(
     mut commands: Commands,
 ) {
     commands.spawn((
-        ThirdPersonCamera::default(),
+        ThirdPersonCamera {
+            offset_enabled: true,
+            offset: Offset::new(0.0, 0.2),
+            zoom: Zoom::new(0.2, 10.0),
+            ..default()
+        },
         Camera3d::default()
     ));
 }
@@ -75,8 +81,9 @@ fn spawn_targets(
         ));
     };
 
-    spawn_cube(Vec3::new(-15.0, 0.0, -55.0), Color::srgb_u8(255, 100, 0), "Sara");
-    spawn_cube(Vec3::new(-25.0, 0.0, -25.0), Color::srgb_u8(0, 240, 123), "Entity");
+    for (position, color, name) in generate_targets(50) {
+        spawn_cube(position, color, name);
+    }
 
 }
 

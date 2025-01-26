@@ -18,7 +18,7 @@ impl Plugin for MovementPlugin {
 fn move_player(
     keys: Res<ButtonInput<KeyCode>>,
     mut camera_query: Query<
-        (&Transform),
+        &Transform,
         (With<ThirdPersonCamera>, Without<ThirdPersonCameraTarget>),
     >,
     mut translations: EventWriter<TranslationEvent>,
