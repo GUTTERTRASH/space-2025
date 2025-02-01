@@ -3,6 +3,7 @@ use bevy_third_person_camera::{
     Offset, ThirdPersonCamera, ThirdPersonCameraPlugin, ThirdPersonCameraTarget, Zoom,
 };
 use space::movement::MovementPlugin;
+use space::projectile::ProjectilePlugin;
 use space::reticule::ReticulePlugin;
 use space::utils::generate_targets;
 
@@ -11,10 +12,13 @@ struct Target;
 
 fn main() {
     App::new()
-        .add_plugins(DefaultPlugins)
-        .add_plugins(ThirdPersonCameraPlugin)
-        .add_plugins(ReticulePlugin)
-        .add_plugins(MovementPlugin)
+        .add_plugins((
+            DefaultPlugins,
+            ThirdPersonCameraPlugin,
+            ReticulePlugin,
+            MovementPlugin,
+            ProjectilePlugin,
+        ))
         .insert_resource(ClearColor(Color::BLACK))
         .insert_resource(AmbientLight {
             color: Color::WHITE,
@@ -66,7 +70,7 @@ fn spawn_targets(
     let mut spawn_cube = |position, color, name| {
         let material = materials.add(StandardMaterial {
             base_color: color,
-            reflectance: 0.02,
+            reflectance: 1.0,
             unlit: false,
             ..Default::default()
         });
@@ -80,7 +84,7 @@ fn spawn_targets(
         ));
     };
 
-    for (position, color, name) in generate_targets(50) {
+    for (position, color, name) in generate_targets(500) {
         spawn_cube(position, color, name);
     }
 }
