@@ -9,7 +9,7 @@ impl Plugin for ReticulePlugin {
     }
 }
 
-const VERTICAL_OFFSET: f32 = 20.0;
+const VERTICAL_OFFSET: f32 = 4.5;
 const RETICULE_SIZE: f32 = 9.0;
 const RETICULE_HALF_SIZE: f32 = RETICULE_SIZE / 2.0;
 
@@ -21,12 +21,14 @@ fn draw_reticule(
     let primary_window = *primary_window_query;
 
     commands
-        .spawn(Node {
+        .spawn((Node {
             width: Val::Percent(100.0),
             height: Val::Percent(100.0),
             justify_content: JustifyContent::FlexStart,
             ..default()
-        })
+        },
+                PickingBehavior::IGNORE,)
+        )
         .with_children(|parent| {
             parent.spawn((
                 ImageNode {

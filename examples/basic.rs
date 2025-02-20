@@ -1,3 +1,5 @@
+use bevy::color::palettes::tailwind::{PINK_100, RED_500};
+use bevy::picking::pointer::PointerInteraction;
 use bevy::prelude::*;
 use bevy_third_person_camera::{
     Offset, ThirdPersonCamera, ThirdPersonCameraPlugin, ThirdPersonCameraTarget, Zoom,
@@ -10,6 +12,8 @@ use space::utils::generate_targets;
 #[derive(Component)]
 struct Target;
 
+const NUM_TARGETS: usize = 500;
+
 fn main() {
     App::new()
         .add_plugins((
@@ -18,6 +22,7 @@ fn main() {
             ReticulePlugin,
             MovementPlugin,
             ProjectilePlugin,
+            MeshPickingPlugin,
         ))
         .insert_resource(ClearColor(Color::BLACK))
         .insert_resource(AmbientLight {
@@ -28,6 +33,7 @@ fn main() {
         .add_systems(Startup, spawn_player)
         .add_systems(Startup, spawn_targets)
         .add_systems(Startup, spawn_lights)
+        .add_systems(Update, draw_mesh_intersections)
         .run();
 }
 
@@ -59,9 +65,11 @@ fn spawn_player(
         MeshMaterial3d(material_handle.clone()),
         Transform::from_scale(Vec3::new(0.1, 0.1, 0.5)),
         ThirdPersonCameraTarget,
+        PickingBehavior::IGNORE,
     ));
 }
 
+// Spawns n number of random targets
 fn spawn_targets(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -75,16 +83,20 @@ fn spawn_targets(
             ..Default::default()
         });
 
-        commands.spawn((
-            Mesh3d(meshes.add(Cuboid::default())),
-            MeshMaterial3d(material),
-            Transform::from_translation(position),
-            Name::new(name),
-            Target,
-        ));
+        commands
+            .spawn((
+                Mesh3d(meshes.add(Cuboid::default())),
+                MeshMaterial3d(material),
+                Transform::from_translation(position),
+                Name::new(name),
+                Target,
+            ))
+            .observe(|over: Trigger<Pointer<Over>>| {
+                info!("YOOO!");
+            });
     };
 
-    for (position, color, name) in generate_targets(500) {
+    for (position, color, name) in generate_targets(NUM_TARGETS) {
         spawn_cube(position, color, name);
     }
 }
@@ -100,4 +112,16 @@ fn spawn_lights(mut commands: Commands) {
         },
         Transform::from_matrix(light_transform),
     ));
+}
+
+/// A system that draws hit indicators for every pointer.
+fn draw_mesh_intersections(pointers: Query<&PointerInteraction>, mut gizmos: Gizmos) {
+    for (point, normal) in pointers
+        .iter()
+        .filter_map(|interaction| interaction.get_nearest_hit())
+        .filter_map(|(_entity, hit)| hit.position.zip(hit.normal))
+    {
+        gizmos.sphere(point, 0.05, RED_500);
+        gizmos.arrow(point, point + normal.normalize() * 0.5, PINK_100);
+    }
 }

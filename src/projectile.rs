@@ -8,10 +8,7 @@ impl Plugin for ProjectilePlugin {
     }
 }
 
-fn fire_bullet(
-    mut commands: Commands,
-    keys: Res<ButtonInput<KeyCode>>,
-) {
+fn fire_bullet(commands: Commands, keys: Res<ButtonInput<KeyCode>>) {
     if keys.pressed(KeyCode::ControlLeft) {
         info!("Firing projectile");
     }
