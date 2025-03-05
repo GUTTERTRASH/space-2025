@@ -4,6 +4,7 @@ use bevy::prelude::*;
 use bevy_third_person_camera::{
     Offset, ThirdPersonCamera, ThirdPersonCameraPlugin, ThirdPersonCameraTarget, Zoom,
 };
+use space::common::Player;
 use space::movement::MovementPlugin;
 use space::projectile::ProjectilePlugin;
 use space::reticule::ReticulePlugin;
@@ -66,6 +67,7 @@ fn spawn_player(
         Transform::from_scale(Vec3::new(0.1, 0.1, 0.5)),
         ThirdPersonCameraTarget,
         PickingBehavior::IGNORE,
+        Player,
     ));
 }
 
@@ -75,13 +77,15 @@ fn spawn_targets(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    let mut spawn_cube = |position, color, name| {
+    let mut spawn_cube = |position, color, name: String| {
         let material = materials.add(StandardMaterial {
             base_color: color,
             reflectance: 1.0,
             unlit: false,
             ..Default::default()
         });
+
+        let name_clone = name.clone();
 
         commands
             .spawn((
@@ -91,8 +95,8 @@ fn spawn_targets(
                 Name::new(name),
                 Target,
             ))
-            .observe(|over: Trigger<Pointer<Over>>| {
-                info!("YOOO!");
+            .observe(move |over: Trigger<Pointer<Over>>| {
+                info!("YOOO {name_clone}!");
             });
     };
 

@@ -21,14 +21,15 @@ fn draw_reticule(
     let primary_window = *primary_window_query;
 
     commands
-        .spawn((Node {
-            width: Val::Percent(100.0),
-            height: Val::Percent(100.0),
-            justify_content: JustifyContent::FlexStart,
-            ..default()
-        },
-                PickingBehavior::IGNORE,)
-        )
+        .spawn((
+            Node {
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                justify_content: JustifyContent::FlexStart,
+                ..default()
+            },
+            PickingBehavior::IGNORE,
+        ))
         .with_children(|parent| {
             parent.spawn((
                 ImageNode {
