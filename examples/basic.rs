@@ -1,4 +1,4 @@
-use bevy::color::palettes::tailwind::{PINK_100, RED_500};
+use bevy::color::palettes::tailwind::{GRAY_500, PINK_100, RED_500};
 use bevy::picking::pointer::PointerInteraction;
 use bevy::prelude::*;
 use bevy_third_person_camera::{
@@ -25,7 +25,7 @@ fn main() {
             ProjectilePlugin,
             MeshPickingPlugin,
         ))
-        .insert_resource(ClearColor(Color::BLACK))
+        .insert_resource(ClearColor(Color::from(GRAY_500)))
         .insert_resource(AmbientLight {
             color: Color::WHITE,
             brightness: 10.0,
