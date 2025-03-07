@@ -1,4 +1,4 @@
-use crate::common::Player;
+use crate::common::{Enemy, Player};
 use bevy::prelude::*;
 
 pub struct ProjectilePlugin;
@@ -23,6 +23,7 @@ struct ProjectileTimer(Timer);
 #[derive(Component)]
 pub struct Projectile {
     pub velocity: Vec3,
+    pub power: f32,
 }
 
 fn fire_bullet(
@@ -56,6 +57,7 @@ fn fire_bullet(
                 Name::new("Bullet"),
                 Projectile {
                     velocity: direction * BULLET_SPEED,
+                    power: 1.0,
                 },
                 PickingBehavior::IGNORE,
             ));
@@ -80,19 +82,28 @@ fn update_bullet(
 
 fn detect_collisions(
     mut commands: Commands,
-    mut projectiles: Query<(&mut Transform, Entity), With<Projectile>>,
-    meshes: Query<(&Transform, &Name, Entity), Without<Projectile>>,
+    mut projectiles: Query<(&mut Transform, &mut Projectile, Entity), With<Projectile>>,
+    mut meshes: Query<(&Transform, &Name, &mut Enemy, Entity), Without<Projectile>>,
 ) {
-    for (projectile_transform, projectile_entity) in projectiles.iter_mut() {
-        for (mesh_transform, name, mesh_entity) in meshes.iter() {
+    for (projectile_transform, projectile, projectile_entity) in projectiles.iter_mut() {
+        for (mesh_transform, name, mut enemy, mesh_entity) in meshes.iter_mut() {
             let distance = projectile_transform
                 .translation
                 .distance(mesh_transform.translation);
+
             if distance < 1.0 {
+                info!("Hit {name}!");
+
+                enemy.health -= projectile.power;
+
+                if enemy.health <= 0.0 {
+                    info!("Killed {name}!");
+                    commands.entity(mesh_entity).despawn();
+                }
+
                 // TODO Fix bug where the projectile might already be despawned due to being too far
                 commands.entity(projectile_entity).despawn();
-                commands.entity(mesh_entity).despawn();
-                info!("Hit {name}!");
+
                 break;
             }
         }

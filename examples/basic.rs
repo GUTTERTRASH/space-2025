@@ -4,7 +4,8 @@ use bevy::prelude::*;
 use bevy_third_person_camera::{
     Offset, ThirdPersonCamera, ThirdPersonCameraPlugin, ThirdPersonCameraTarget, Zoom,
 };
-use space::common::Player;
+use space::combat::CombatPlugin;
+use space::common::{Enemy, Player};
 use space::movement::MovementPlugin;
 use space::projectile::ProjectilePlugin;
 use space::reticule::ReticulePlugin;
@@ -24,6 +25,7 @@ fn main() {
             MovementPlugin,
             ProjectilePlugin,
             MeshPickingPlugin,
+            // CombatPlugin,
         ))
         .insert_resource(ClearColor(Color::from(GRAY_500)))
         .insert_resource(AmbientLight {
@@ -94,8 +96,9 @@ fn spawn_targets(
                 Transform::from_translation(position),
                 Name::new(name),
                 Target,
+                Enemy { health: 100.0 },
             ))
-            .observe(move |over: Trigger<Pointer<Over>>| {
+            .observe(move |_over: Trigger<Pointer<Over>>| {
                 info!("YOOO {name_clone}!");
             });
     };

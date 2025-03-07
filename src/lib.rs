@@ -1,5 +1,4 @@
-use bevy::prelude::Component;
-
+pub mod combat;
 pub mod common;
 pub mod movement;
 pub mod projectile;
