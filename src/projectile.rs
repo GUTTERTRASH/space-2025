@@ -71,7 +71,11 @@ fn update_bullet(
     mut query: Query<(&mut Transform, &Projectile, Entity), Without<Player>>,
     player: Query<&Transform, With<Player>>,
 ) {
-    let player_translation = player.get_single().unwrap().translation;
+    let Ok(player_transform) = player.get_single() else {
+        return;
+    };
+
+    let player_translation = player_transform.translation;
     for (mut transform, projectile, entity) in query.iter_mut() {
         transform.translation += projectile.velocity * time.delta_secs();
         if (player_translation.distance(transform.translation)).abs() > MAX_DISTANCE {

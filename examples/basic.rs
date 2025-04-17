@@ -4,12 +4,13 @@ use bevy::prelude::*;
 use bevy_third_person_camera::{
     Offset, ThirdPersonCamera, ThirdPersonCameraPlugin, ThirdPersonCameraTarget, Zoom,
 };
-use space::combat::CombatPlugin;
 use space::common::{Enemy, Player};
 use space::movement::MovementPlugin;
 use space::projectile::ProjectilePlugin;
 use space::reticule::ReticulePlugin;
 use space::utils::generate_targets;
+
+use avian3d::prelude::*;
 
 #[derive(Component)]
 struct Target;
@@ -21,6 +22,7 @@ fn main() {
         .add_plugins((
             DefaultPlugins,
             ThirdPersonCameraPlugin,
+            PhysicsPlugins::default(),
             ReticulePlugin,
             MovementPlugin,
             ProjectilePlugin,
@@ -32,6 +34,7 @@ fn main() {
             color: Color::WHITE,
             brightness: 10.0,
         })
+        .insert_resource(Gravity(Vec3::ZERO))
         .add_systems(Startup, spawn_camera)
         .add_systems(Startup, spawn_player)
         .add_systems(Startup, spawn_targets)
@@ -70,6 +73,10 @@ fn spawn_player(
         ThirdPersonCameraTarget,
         PickingBehavior::IGNORE,
         Player,
+        RigidBody::Dynamic,
+        ColliderConstructor::TrimeshFromMesh,
+        // Collider::cuboid(1.0, 1.0, 1.0),
+        LockedAxes::ROTATION_LOCKED,
     ));
 }
 
@@ -97,6 +104,8 @@ fn spawn_targets(
                 Name::new(name),
                 Target,
                 Enemy { health: 100.0 },
+                RigidBody::Dynamic,
+                ColliderConstructor::TrimeshFromMesh,
             ))
             .observe(move |_over: Trigger<Pointer<Over>>| {
                 info!("YOOO {name_clone}!");

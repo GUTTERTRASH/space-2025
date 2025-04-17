@@ -1,3 +1,5 @@
+use avian3d::math::*;
+use avian3d::prelude::*;
 use bevy::prelude::*;
 use bevy_third_person_camera::{ThirdPersonCamera, ThirdPersonCameraTarget};
 use std::ops::Deref;
@@ -7,23 +9,21 @@ pub struct MovementPlugin;
 impl Plugin for MovementPlugin {
     fn build(&self, app: &mut App) {
         app.add_event::<TranslationEvent>()
-            .add_event::<RotationEvent>()
-            .add_systems(PreUpdate, move_player)
-            .add_systems(Update, translate_player)
-            .add_systems(Update, rotate_player);
+            // .add_event::<RotationEvent>()
+            .add_systems(
+                Update,
+                (handle_keyboard_input, translate_player, dampen_movement).chain(),
+            );
     }
 }
 
-fn move_player(
+fn handle_keyboard_input(
     keys: Res<ButtonInput<KeyCode>>,
-    mut camera_query: Query<
-        &Transform,
-        (With<ThirdPersonCamera>, Without<ThirdPersonCameraTarget>),
-    >,
+    camera_query: Query<&Transform, (With<ThirdPersonCamera>, Without<ThirdPersonCameraTarget>)>,
     mut translations: EventWriter<TranslationEvent>,
-    mut rotations: EventWriter<RotationEvent>,
+    // mut rotations: EventWriter<RotationEvent>,
 ) {
-    if keys.any_pressed([
+    if !keys.any_pressed([
         KeyCode::KeyW,
         KeyCode::KeyA,
         KeyCode::KeyS,
@@ -31,56 +31,40 @@ fn move_player(
         KeyCode::KeyQ,
         KeyCode::KeyE,
     ]) {
-        let Ok(camera_transform) = camera_query.get_single_mut() else {
-            return;
-        };
-
-        let xz = Vec3::new(1.0, 0.0, 1.0);
-        let (forward, right, up) = (
-            (*camera_transform.forward() * xz).normalize(),
-            (*camera_transform.right() * xz).normalize(),
-            Vec3::Y,
-        );
-
-        let mut desired_velocity = Vec3::ZERO;
-        let mut clamp_direction = false;
-
-        if keys.pressed(KeyCode::KeyW) {
-            desired_velocity += forward;
-            clamp_direction = true;
-        }
-        if keys.pressed(KeyCode::KeyS) {
-            desired_velocity -= forward;
-            clamp_direction = true;
-        }
-        if keys.pressed(KeyCode::KeyD) {
-            desired_velocity += right;
-        }
-        if keys.pressed(KeyCode::KeyA) {
-            desired_velocity -= right;
-        }
-        if keys.pressed(KeyCode::KeyQ) {
-            desired_velocity += up;
-        }
-        if keys.pressed(KeyCode::KeyE) {
-            desired_velocity -= up;
-        }
-
-        let speed = if keys.pressed(KeyCode::ShiftLeft) {
-            2.0
-        } else {
-            0.1
-        };
-
-        desired_velocity *= speed;
-
-        if clamp_direction {
-            let rotation = Transform::default().looking_at(forward, up).rotation;
-            rotations.send(RotationEvent::new(&rotation));
-        }
-
-        translations.send(TranslationEvent::new(&desired_velocity));
+        return;
     }
+
+    let Ok(camera_transform) = camera_query.get_single() else {
+        return;
+    };
+
+    let forward_input = keys.any_pressed([KeyCode::KeyW, KeyCode::ArrowUp]);
+    let backward_input = keys.any_pressed([KeyCode::KeyS, KeyCode::ArrowDown]);
+    let left_input = keys.any_pressed([KeyCode::KeyA, KeyCode::ArrowLeft]);
+    let right_input = keys.any_pressed([KeyCode::KeyD, KeyCode::ArrowRight]);
+    let up_input = keys.pressed(KeyCode::KeyE);
+    let down_input = keys.pressed(KeyCode::KeyQ);
+
+    let forward_signal = forward_input as i8 - backward_input as i8;
+    let right_signal = right_input as i8 - left_input as i8;
+    let up_signal = up_input as i8 - down_input as i8;
+
+    let xz = Vec3::new(1.0, 0.0, 1.0);
+    let (forward, right, up) = (
+        (*camera_transform.forward() * xz).normalize(),
+        (*camera_transform.right() * xz).normalize(),
+        Vec3::Y,
+    );
+
+    let direction = ((forward_signal as Scalar * forward)
+        + (right_signal as Scalar * right)
+        + (up_signal as Scalar * up))
+        .clamp_length_max(1.0);
+
+    if direction != Vector3::ZERO {
+        translations.send(TranslationEvent::new(&direction));
+    }
+
 }
 
 #[derive(Event, Debug, Default)]
@@ -103,46 +87,79 @@ impl TranslationEvent {
 }
 
 fn translate_player(
-    mut events: EventReader<TranslationEvent>,
-    mut query: Query<&mut Transform, With<ThirdPersonCameraTarget>>,
-) {
-    for event in events.read() {
-        for mut transform in query.iter_mut() {
-            transform.translation += **event;
-        }
-    }
-}
-
-#[derive(Event, Debug, Default)]
-pub struct RotationEvent {
-    value: Quat,
-}
-
-impl RotationEvent {
-    pub fn new(value: &Quat) -> Self {
-        Self { value: *value }
-    }
-}
-
-impl Deref for RotationEvent {
-    type Target = Quat;
-
-    fn deref(&self) -> &Self::Target {
-        &self.value
-    }
-}
-
-fn rotate_player(
     time: Res<Time>,
-    mut events: EventReader<RotationEvent>,
-    mut player_query: Query<&mut Transform, With<ThirdPersonCameraTarget>>,
+    mut events: EventReader<TranslationEvent>,
+    mut query: Query<&mut LinearVelocity, With<ThirdPersonCameraTarget>>,
 ) {
-    let Ok(mut player_transform) = player_query.get_single_mut() else {
+    let delta_time = time.delta_secs_f64().adjust_precision();
+    let acceleration = 30.0;
+
+    let Ok(mut linear_velocity) = query.get_single_mut() else {
         return;
     };
+
     for event in events.read() {
-        player_transform.rotation = player_transform
-            .rotation
-            .slerp(**event, 10.0 * time.delta_secs());
+        **linear_velocity += **event * acceleration * delta_time;
     }
 }
+
+fn dampen_movement(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut query: Query<&mut LinearVelocity, With<ThirdPersonCameraTarget>>,
+) {
+    if keys.any_pressed([
+        KeyCode::KeyW,
+        KeyCode::KeyA,
+        KeyCode::KeyS,
+        KeyCode::KeyD,
+        KeyCode::KeyQ,
+        KeyCode::KeyE,
+    ]) {
+        return;
+    }
+
+    let damping_factor = 0.9; // Adjust this value to control the damping speed
+
+    let Ok(mut linear_velocity) = query.get_single_mut() else {
+        return;
+    };
+
+    if **linear_velocity != Vec3::ZERO {
+        **linear_velocity *= damping_factor;
+    }
+
+}
+
+// #[derive(Event, Debug, Default)]
+// pub struct RotationEvent {
+//     value: Quat,
+// }
+
+// impl RotationEvent {
+//     pub fn new(value: &Quat) -> Self {
+//         Self { value: *value }
+//     }
+// }
+
+// impl Deref for RotationEvent {
+//     type Target = Quat;
+
+//     fn deref(&self) -> &Self::Target {
+//         &self.value
+//     }
+// }
+
+// // fn rotate_player(
+// //     time: Res<Time>,
+// //     mut events: EventReader<RotationEvent>,
+// //     mut player_query: Query<&mut Transform, With<ThirdPersonCameraTarget>>,
+// // ) {
+// //     let Ok(mut player_transform) = player_query.get_single_mut() else {
+// //         return;
+// //     };
+// //     for event in events.read() {
+// //         player_transform.rotation = player_transform
+// //             .rotation
+// //             .slerp(**event, 10.0 * time.delta_secs());
+// //     }
+// // }

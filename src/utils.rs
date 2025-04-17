@@ -11,7 +11,7 @@ pub fn generate_targets(len: usize) -> Box<[(Vec3, Color, String)]> {
             rng.gen_range(-20.0..20.0),
             rng.gen_range(-20.0..-1.0),
         );
-        let color = Color::srgb_u8(rng.gen(), rng.gen(), rng.gen());
+        let color = Color::srgb_u8(rng.r#gen(), rng.r#gen(), rng.r#gen());
         let name = format!("Target #{}", i);
 
         vec.push((position, color, name));

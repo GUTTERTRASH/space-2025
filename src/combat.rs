@@ -1,5 +1,4 @@
 use bevy::prelude::*;
-use rand::Rng;
 
 use crate::common::{Enemy, Player};
 
@@ -27,7 +26,11 @@ fn combat_system(
     mut timer: ResMut<CombatTimer>,
 ) {
     if timer.0.tick(time.delta()).just_finished() {
-        let player_translation = player.get_single().unwrap().translation;
+        let Ok(player_transform) = player.get_single() else {
+            return;
+        };
+
+        let player_translation = player_transform.translation;
         // let mut rng = rand::thread_rng();
         let enemy_positions: Vec<_> = query.iter().map(|t| t.translation).collect();
         for (i, mut enemy_transform) in query.iter_mut().enumerate() {
@@ -64,7 +67,8 @@ fn combat_system(
                 if i != j {
                     let distance = enemy_transform.translation.distance(*other_translation);
                     if distance < 10.0 {
-                        let avoid_direction = (enemy_transform.translation - *other_translation).normalize();
+                        let avoid_direction =
+                            (enemy_transform.translation - *other_translation).normalize();
                         enemy_transform.translation += avoid_direction * 0.05; // Adjust position to avoid collision
                     }
                 }
