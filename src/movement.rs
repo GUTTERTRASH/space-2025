@@ -12,7 +12,10 @@ impl Plugin for MovementPlugin {
             // .add_event::<RotationEvent>()
             .add_systems(
                 Update,
-                (handle_keyboard_input, translate_player, dampen_movement).chain(),
+                handle_keyboard_input,
+            ).add_systems(
+                FixedUpdate,
+                (translate_player, dampen_movement).chain(),
             );
     }
 }

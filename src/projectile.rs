@@ -5,7 +5,8 @@ pub struct ProjectilePlugin;
 
 impl Plugin for ProjectilePlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(ProjectileTimer(Timer::from_seconds(
+        app
+        .insert_resource(ProjectileTimer(Timer::from_seconds(
             FIRE_RATE,
             TimerMode::Repeating,
         )))
@@ -25,6 +26,51 @@ pub struct Projectile {
     pub velocity: Vec3,
     pub power: f32,
 }
+
+// fn fire_missile(
+//     mut commands: Commands,
+//     keys: Res<ButtonInput<KeyCode>>,
+//     mut meshes: ResMut<Assets<Mesh>>,
+//     mut materials: ResMut<Assets<StandardMaterial>>,
+//     camera_query: Query<&Transform, With<Camera3d>>,
+//     player_query: Query<&GlobalTransform, With<Player>>,
+//     time: Res<Time>,
+//     mut timer: ResMut<ProjectileTimer>,
+//     pick_state: Res<bevy_mod_picking::PickingCamera>,
+// ) {
+//     if keys.just_pressed(KeyCode::Space) {
+//         if let Some((entity, _intersection)) = pick_state
+//             .intersect_top()
+//             .and_then(|(entity, intersection)| Some((entity, intersection))) 
+//         {
+//             let bullet_material = materials.add(StandardMaterial {
+//                 base_color: Color::RED,
+//                 unlit: true,
+//                 ..Default::default()
+//             });
+
+//             let camera_transform = camera_query.single();
+//             let player_global_transform = player_query.single();
+//             let direction = camera_transform.forward().normalize();
+
+//             commands.spawn((
+//                 Mesh3d(meshes.add(Cuboid::default())),
+//                 MeshMaterial3d(bullet_material),
+//                 Transform::from_scale(Vec3::new(0.2, 0.2, 10.0))
+//                     .with_translation(player_global_transform.translation() + direction * 10.0)
+//                     .with_rotation(camera_transform.rotation),
+//                 Name::new("Missile"),
+//                 Projectile {
+//                     velocity: direction * BULLET_SPEED,
+//                     power: 5.0,
+//                 },
+//                 PickingBehavior::IGNORE,
+//             ));
+
+//             info!("Fired missile at entity: {:?}", entity);
+//         }
+//     }
+// }
 
 fn fire_bullet(
     mut commands: Commands,

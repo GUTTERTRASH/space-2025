@@ -4,6 +4,7 @@ use bevy::prelude::*;
 use bevy_third_person_camera::{
     Offset, ThirdPersonCamera, ThirdPersonCameraPlugin, ThirdPersonCameraTarget, Zoom,
 };
+use space::combat::CombatPlugin;
 use space::common::{Enemy, Player};
 use space::movement::MovementPlugin;
 use space::projectile::ProjectilePlugin;
@@ -15,7 +16,7 @@ use avian3d::prelude::*;
 #[derive(Component)]
 struct Target;
 
-const NUM_TARGETS: usize = 500;
+const NUM_TARGETS: usize = 50;
 
 fn main() {
     App::new()
@@ -23,10 +24,10 @@ fn main() {
             DefaultPlugins,
             ThirdPersonCameraPlugin,
             PhysicsPlugins::default(),
+            PhysicsPickingPlugin,
             ReticulePlugin,
             MovementPlugin,
             ProjectilePlugin,
-            MeshPickingPlugin,
             // CombatPlugin,
         ))
         .insert_resource(ClearColor(Color::from(GRAY_500)))
@@ -75,7 +76,6 @@ fn spawn_player(
         Player,
         RigidBody::Dynamic,
         ColliderConstructor::TrimeshFromMesh,
-        // Collider::cuboid(1.0, 1.0, 1.0),
         LockedAxes::ROTATION_LOCKED,
     ));
 }
@@ -113,7 +113,7 @@ fn spawn_targets(
     };
 
     for (position, color, name) in generate_targets(NUM_TARGETS) {
-        spawn_cube(position, color, name);
+        spawn_cube(position - Vec3 { x: 0.0, y: 0.0, z: 200.0 }, color, name);
     }
 }
 
