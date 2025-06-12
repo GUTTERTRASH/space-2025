@@ -1,120 +1,125 @@
 use avian3d::prelude::{ExternalForce, RigidBody};
+use bevy::ecs::component::ComponentId;
 use bevy::prelude::*;
-
-use crate::common::{Enemy, Player};
+use bevy_observed_utility::prelude::*;
 
 pub struct CombatPlugin;
 
 impl Plugin for CombatPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(CombatTimer(Timer::from_seconds(
-            FIRE_RATE,
-            TimerMode::Repeating,
-        )))
-        .add_systems(Update, combat_system);
+        app.add_plugins(ObservedUtilityPlugins::RealTime)
+            .init_resource::<ActionIds>()
+            .init_resource::<Approaching>()
+            .add_systems(FixedUpdate, (recalculate_distance, approach_target).chain())
+            .add_observer(score_ancestor::<CombatState, Combaty>)
+            .add_observer(on_action_initiated_insert_from_resource::<Approaching>)
+            .add_observer(on_action_ended_remove::<Approaching>);
     }
 }
 
-const FIRE_RATE: f32 = 0.02;
+#[derive(Component)]
+pub struct CombatState {
+    pub target: Entity,
+    pub distance: f32,
+}
 
-#[derive(Resource)]
-struct CombatTimer(Timer);
+impl From<&CombatState> for Score {
+    fn from(combat_state: &CombatState) -> Self {
+        let score = (combat_state.distance / 100.).clamp(0.0, 1.0);
+        info!("Calculating score based on distance: {}", score);
+        Score::new(score)
+    }
+}
 
-fn combat_system(
-    time: Res<Time>,
-    mut query: Query<(&mut Transform, &mut ExternalForce), (With<Enemy>, Without<Player>)>,
-    player: Query<&Transform, With<Player>>,
-    mut timer: ResMut<CombatTimer>,
-) {
-    if timer.0.tick(time.delta()).just_finished() {
-        let Ok(player_transform) = player.get_single() else {
-            return;
-        };
+#[derive(Component)]
+pub struct Combaty;
 
-        let player_translation = player_transform.translation;
-        // let mut rng = rand::thread_rng();
-        let enemy_positions: Vec<_> = query.iter().map(|(t, _)| t.translation,).collect();
-        for (i, (mut enemy_transform, mut enemy_rigidbody)) in query.iter_mut().enumerate() {
-            let distance_to_player = enemy_transform.translation.distance(player_translation);
+#[derive(Component, Resource, Reflect, Clone, Copy, PartialEq, Debug)]
+pub struct Approaching {
+    pub minimum_distance: f32,
+    pub speed: f32,
+}
 
-            if distance_to_player > 20.0 {
-                
-                // Move towards the player
-                // let direction = (player_translation - enemy_transform.translation).normalize();
-
-                // // Parabolic offset
-                // let offset = Vec3::new(0.0, (time.elapsed_secs() * 2.0).sin() * 5.0, 0.0);
-
-                // // Sinusoidal offset
-                // let offset = Vec3::new(
-                //     (time.elapsed_secs() * 2.0).sin() * 2.0,
-                //     (time.elapsed_secs() * 2.0).cos() * 2.0,
-                //     0.0,
-                // );
-
-                // let curved_direction = (direction + offset).normalize();
-                // enemy_transform.translation += curved_direction * 0.1; // Move towards the player with a speed of 100 units per second
-
-                // let curve_force = Vec3::new(0.0, (time.elapsed_secs() * 2.0).sin() * 5.0, 0.0);
-                // let total_force = direction * 10.0 + curve_force;
-                // enemy_rigidbody.apply_force(total_force);
-
-                // let random_offset = Vec3::new(
-                //     rng.gen_range(-0.1..0.1),
-                //     rng.gen_range(-0.1..0.1),
-                //     0.0,
-                // );
-                // let parabolic_direction = Vec3::new(
-                //     direction.x + random_offset.x,
-                //     direction.y + random_offset.y,
-                //     direction.z,
-                // ).normalize();
-                // transform.translation += parabolic_direction * 0.1; // Move towards the player with a speed of 100 units per second
-                // enemy_transform.translation += direction * 0.5; // Move towards the player with a speed of 100 units per second
-
-
-                // Bezier curve
-                let control_point = (enemy_transform.translation + player_translation) / 2.0 + Vec3::Y * 100.0; // Control point above the midpoint for a curve
-               
-                let speed = 0.05;
-                let t = ((time.elapsed_secs() * speed) % 1.0) as f32; // Loop through 0.0 to 1.0
-
-                let new_position = bezier_curve(
-                    enemy_transform.translation,
-                    control_point,
-                    player_translation,
-                    t,
-                );
-
-                enemy_transform.translation = new_position;
-
-            } else {
-                // Orbit the player
-                // let angle = time.elapsed_secs() as f32;
-                // let orbit_radius = 10.0;
-                // enemy_transform.translation = Vec3::new(
-                //     player_translation.x + orbit_radius * angle.cos(),
-                //     player_translation.y + orbit_radius * angle.sin(),
-                //     player_translation.z,
-                // );
-            }
-
-            // Avoid other enemies
-            for (j, other_translation) in enemy_positions.iter().enumerate() {
-                if i != j {
-                    let distance = enemy_transform.translation.distance(*other_translation);
-                    if distance < 10.0 {
-                        let avoid_direction =
-                            (enemy_transform.translation - *other_translation).normalize();
-                        enemy_transform.translation += avoid_direction * 0.05; // Adjust position to avoid collision
-                    }
-                }
-            }
+impl Default for Approaching {
+    fn default() -> Self {
+        Self {
+            minimum_distance: 20.0,
+            speed: 0.50,
         }
     }
 }
 
-fn bezier_curve(p0: Vec3, p1: Vec3, p2: Vec3, t: f32) -> Vec3 {
-    let u = 1.0 - t;
-    (u * u * p0) + (2.0 * u * t * p1) + (t * t * p2)
+#[derive(Component, Reflect, Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct Idle;
+
+#[derive(Resource)]
+pub struct ActionIds {
+    pub idle: ComponentId,
+    pub approach: ComponentId,
+}
+
+impl FromWorld for ActionIds {
+    fn from_world(world: &mut World) -> Self {
+        Self {
+            idle: world.register_component::<Idle>(),
+            approach: world.register_component::<Approaching>(),
+        }
+    }
+}
+
+pub fn recalculate_distance(
+    mut query: Query<(&mut CombatState, &Transform)>,
+    targets: Query<&Transform>,
+) {
+    for (mut combat_state, transform) in query.iter_mut() {
+        if let Ok(target_transform) = targets.get(combat_state.target) {
+            combat_state.distance = transform.translation.distance(target_transform.translation);
+            // info!(
+            //     "Recalculating distance to target: {:?}",
+            //     combat_state.distance
+            // );
+        }
+    }
+}
+
+pub fn approach_target(
+    mut commands: Commands,
+    actions: Res<ActionIds>,
+    mut query: Query<(
+        Entity,
+        &mut CombatState,
+        &mut ExternalForce,
+        &mut Transform,
+        &Approaching,
+    )>,
+    targets: Query<&Transform, Without<Approaching>>,
+) {
+    for (actor, mut combat_state, mut external_force, mut transform, approaching) in
+        query.iter_mut()
+    {
+        if let Ok(target_transform) = targets.get(combat_state.target) {
+            let distance = combat_state.distance;
+            info!("Current distance to target: {}", distance);
+            if distance > approaching.minimum_distance {
+                let direction = (target_transform.translation - transform.translation).normalize();
+                let movement = direction * approaching.speed;
+                combat_state.distance -= movement.length();
+                // external_force.apply_force(movement);
+                transform.translation += movement;
+                info!(
+                    "Approaching target: {:?}, new distance: {}",
+                    combat_state.target, combat_state.distance
+                );
+            } else {
+                info!("Reached minimum distance to target: {}", distance);
+                commands.trigger_targets(
+                    OnActionEnded {
+                        action: actions.approach,
+                        reason: ActionEndReason::Completed,
+                    },
+                    TargetedAction(actor, actions.approach),
+                );
+            }
+        }
+    }
 }

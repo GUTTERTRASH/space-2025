@@ -872,6 +872,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "bevy_observed_utility"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e16daf3839c4035cc1473e8bcf5f649cdc7aff1909826ebb7c7d3e186e4925a2"
+dependencies = [
+ "bevy",
+]
+
+[[package]]
 name = "bevy_pbr"
 version = "0.15.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3988,6 +3997,7 @@ version = "0.1.0"
 dependencies = [
  "avian3d",
  "bevy",
+ "bevy_observed_utility",
  "bevy_third_person_camera",
  "rand",
 ]

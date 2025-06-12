@@ -10,13 +10,8 @@ impl Plugin for MovementPlugin {
     fn build(&self, app: &mut App) {
         app.add_event::<TranslationEvent>()
             // .add_event::<RotationEvent>()
-            .add_systems(
-                Update,
-                handle_keyboard_input,
-            ).add_systems(
-                FixedUpdate,
-                (translate_player, dampen_movement).chain(),
-            );
+            .add_systems(Update, handle_keyboard_input)
+            .add_systems(FixedUpdate, (translate_player, dampen_movement).chain());
     }
 }
 
@@ -67,7 +62,6 @@ fn handle_keyboard_input(
     if direction != Vector3::ZERO {
         translations.send(TranslationEvent::new(&direction));
     }
-
 }
 
 #[derive(Event, Debug, Default)]
@@ -130,7 +124,6 @@ fn dampen_movement(
     if **linear_velocity != Vec3::ZERO {
         **linear_velocity *= damping_factor;
     }
-
 }
 
 // #[derive(Event, Debug, Default)]

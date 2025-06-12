@@ -5,8 +5,7 @@ pub struct ProjectilePlugin;
 
 impl Plugin for ProjectilePlugin {
     fn build(&self, app: &mut App) {
-        app
-        .insert_resource(ProjectileTimer(Timer::from_seconds(
+        app.insert_resource(ProjectileTimer(Timer::from_seconds(
             FIRE_RATE,
             TimerMode::Repeating,
         )))
@@ -41,7 +40,7 @@ pub struct Projectile {
 //     if keys.just_pressed(KeyCode::Space) {
 //         if let Some((entity, _intersection)) = pick_state
 //             .intersect_top()
-//             .and_then(|(entity, intersection)| Some((entity, intersection))) 
+//             .and_then(|(entity, intersection)| Some((entity, intersection)))
 //         {
 //             let bullet_material = materials.add(StandardMaterial {
 //                 base_color: Color::RED,

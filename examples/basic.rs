@@ -1,10 +1,11 @@
 use bevy::color::palettes::tailwind::{GRAY_500, PINK_100, RED_500};
 use bevy::picking::pointer::PointerInteraction;
 use bevy::prelude::*;
+use bevy_observed_utility::prelude::*;
 use bevy_third_person_camera::{
     Offset, ThirdPersonCamera, ThirdPersonCameraPlugin, ThirdPersonCameraTarget, Zoom,
 };
-use space::combat::CombatPlugin;
+use space::combat::{ActionIds, CombatPlugin, CombatState, Combaty};
 use space::common::{Enemy, Player};
 use space::movement::MovementPlugin;
 use space::projectile::ProjectilePlugin;
@@ -16,7 +17,7 @@ use avian3d::prelude::*;
 #[derive(Component)]
 struct Target;
 
-const NUM_TARGETS: usize = 50;
+const NUM_TARGETS: usize = 1;
 
 fn main() {
     App::new()
@@ -28,18 +29,19 @@ fn main() {
             ReticulePlugin,
             MovementPlugin,
             ProjectilePlugin,
-            // CombatPlugin,
+            CombatPlugin,
         ))
         .insert_resource(ClearColor(Color::from(GRAY_500)))
+        // .insert_resource(ClearColor(Color::from(BLACK)))
         .insert_resource(AmbientLight {
             color: Color::WHITE,
             brightness: 10.0,
         })
         .insert_resource(Gravity(Vec3::ZERO))
         .add_systems(Startup, spawn_camera)
-        .add_systems(Startup, spawn_player)
-        .add_systems(Startup, spawn_targets)
+        .add_systems(Startup, (spawn_player, spawn_targets).chain())
         .add_systems(Startup, spawn_lights)
+        .add_systems(Startup, spawn_sun)
         .add_systems(Update, draw_mesh_intersections)
         .run();
 }
@@ -85,6 +87,8 @@ fn spawn_targets(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    actions: Res<ActionIds>,
+    player_query: Query<Entity, With<Player>>,
 ) {
     let mut spawn_cube = |position, color, name: String| {
         let material = materials.add(StandardMaterial {
@@ -96,24 +100,43 @@ fn spawn_targets(
 
         let name_clone = name.clone();
 
+        let player = player_query.single();
+        let combat = commands.spawn((Combaty, Score::default())).id();
+
         commands
             .spawn((
+                Name::new(name),
                 Mesh3d(meshes.add(Cuboid::default())),
                 MeshMaterial3d(material),
                 Transform::from_translation(position),
-                Name::new(name),
                 Target,
                 Enemy { health: 100.0 },
+                Picker::new(actions.idle).with(combat, actions.approach),
+                CombatState {
+                    target: player,
+                    distance: 0.0,
+                },
+                FirstToScore::new(0.8),
                 RigidBody::Dynamic,
                 ColliderConstructor::TrimeshFromMesh,
             ))
             .observe(move |_over: Trigger<Pointer<Over>>| {
                 info!("YOOO {name_clone}!");
-            });
+            })
+            .add_child(combat);
     };
 
     for (position, color, name) in generate_targets(NUM_TARGETS) {
-        spawn_cube(position - Vec3 { x: 0.0, y: 0.0, z: 200.0 }, color, name);
+        spawn_cube(
+            position
+                - Vec3 {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 200.0,
+                },
+            color,
+            name,
+        );
     }
 }
 
@@ -127,6 +150,42 @@ fn spawn_lights(mut commands: Commands) {
             ..default()
         },
         Transform::from_matrix(light_transform),
+    ));
+}
+
+fn spawn_sun(
+    mut commands: Commands,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+) {
+    // True-to-life scale (1 unit = 1,000 km)
+    let sun_radius = 0.696; // 696,340 km / 1,000,000
+    let sun_distance = 149.6; // 149,600,000 km / 1,000,000
+
+    let sun_material = materials.add(StandardMaterial {
+        base_color: Color::srgb(1.0, 0.95, 0.7),
+        emissive: Color::srgba(1.0, 0.95, 0.7, 1.0).into(),
+        unlit: true,
+        ..default()
+    });
+
+    let sun_transform = Transform::from_translation(Vec3::new(0.0, 0.0, -sun_distance));
+
+    commands.spawn((
+        PointLight {
+            intensity: 10_000.0,
+            shadows_enabled: true,
+            range: 100.0,
+            ..default()
+        },
+        sun_transform,
+    ));
+
+    commands.spawn((
+        Mesh3d(meshes.add(Sphere { radius: sun_radius })),
+        MeshMaterial3d(sun_material),
+        sun_transform,
+        Name::new("Sun"),
     ));
 }
 
