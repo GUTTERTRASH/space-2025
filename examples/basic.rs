@@ -1,11 +1,15 @@
 use bevy::color::palettes::tailwind::{GRAY_500, PINK_100, RED_500};
+use bevy::log::LogPlugin;
 use bevy::picking::pointer::PointerInteraction;
 use bevy::prelude::*;
-use bevy_observed_utility::prelude::*;
+use bevy_inspector_egui::bevy_egui::EguiPlugin;
+use bevy_inspector_egui::quick::WorldInspectorPlugin;
 use bevy_third_person_camera::{
     Offset, ThirdPersonCamera, ThirdPersonCameraPlugin, ThirdPersonCameraTarget, Zoom,
 };
-use space::combat::{ActionIds, CombatPlugin, CombatState, Combaty};
+use big_brain::prelude::FirstToScore;
+use big_brain::thinker::Thinker;
+use space::combat::{Approach, Approaching, Approachy, Attack, Attacking, Attacky, CombatPlugin};
 use space::common::{Enemy, Player};
 use space::movement::MovementPlugin;
 use space::projectile::ProjectilePlugin;
@@ -22,7 +26,10 @@ const NUM_TARGETS: usize = 1;
 fn main() {
     App::new()
         .add_plugins((
-            DefaultPlugins,
+            DefaultPlugins.set(LogPlugin {
+                filter: "big_brain=debug,space=debug".to_string(),
+                ..default()
+            }),
             ThirdPersonCameraPlugin,
             PhysicsPlugins::default(),
             PhysicsPickingPlugin,
@@ -30,6 +37,8 @@ fn main() {
             MovementPlugin,
             ProjectilePlugin,
             CombatPlugin,
+            EguiPlugin,
+            WorldInspectorPlugin::new(),
         ))
         .insert_resource(ClearColor(Color::from(GRAY_500)))
         // .insert_resource(ClearColor(Color::from(BLACK)))
@@ -38,10 +47,10 @@ fn main() {
             brightness: 10.0,
         })
         .insert_resource(Gravity(Vec3::ZERO))
-        .add_systems(Startup, spawn_camera)
-        .add_systems(Startup, (spawn_player, spawn_targets).chain())
-        .add_systems(Startup, spawn_lights)
-        .add_systems(Startup, spawn_sun)
+        .add_systems(
+            Startup,
+            (spawn_camera, spawn_lights, spawn_player, spawn_targets).chain(),
+        )
         .add_systems(Update, draw_mesh_intersections)
         .run();
 }
@@ -70,6 +79,7 @@ fn spawn_player(
     });
 
     commands.spawn((
+        Name::new("Player"),
         Mesh3d(assets.load("models/spaceship.gltf#Mesh0/Primitive0")),
         MeshMaterial3d(material_handle.clone()),
         Transform::from_scale(Vec3::new(0.1, 0.1, 0.5)),
@@ -82,13 +92,16 @@ fn spawn_player(
     ));
 }
 
+#[derive(Component)]
+pub struct Nameplate;
+
 // Spawns n number of random targets
 fn spawn_targets(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    actions: Res<ActionIds>,
-    player_query: Query<Entity, With<Player>>,
+    // actions: Res<ActionIds>,
+    player_query: Query<(Entity, &Transform), With<Player>>,
 ) {
     let mut spawn_cube = |position, color, name: String| {
         let material = materials.add(StandardMaterial {
@@ -100,8 +113,16 @@ fn spawn_targets(
 
         let name_clone = name.clone();
 
-        let player = player_query.single();
-        let combat = commands.spawn((Combaty, Score::default())).id();
+        let (player, player_transform) = player_query.single();
+        // let combat = commands.spawn((Enemy::default(), Score::default())).id();
+        // let attack = commands.spawn((Enemy::default(), Score::default())).id();
+
+        let text_style = TextFont {
+            font_size: 18.0,
+            ..default()
+        };
+
+        let mat_clone = material.clone();
 
         commands
             .spawn((
@@ -110,20 +131,63 @@ fn spawn_targets(
                 MeshMaterial3d(material),
                 Transform::from_translation(position),
                 Target,
-                Enemy { health: 100.0 },
-                Picker::new(actions.idle).with(combat, actions.approach),
-                CombatState {
+                Enemy::default(),
+                Approaching {
                     target: player,
-                    distance: 0.0,
+                    distance: player_transform.translation.distance(position),
+                    speed: 0.5,
                 },
-                FirstToScore::new(0.8),
+                Attacking {
+                    target: player,
+                    distance: player_transform.translation.distance(position),
+                },
+                Thinker::build()
+                    .label("My Thinker")
+                    .picker(FirstToScore { threshold: 0.5 })
+                    // Technically these are supposed to be ActionBuilders and
+                    // ScorerBuilders, but our Clone impls simplify our code here.
+                    .when(
+                        Approachy,
+                        Approach {
+                            until_distance: 20.0,
+                        },
+                    )
+                    .when(Attacky, Attack { min_distance: 30.0 }),
                 RigidBody::Dynamic,
                 ColliderConstructor::TrimeshFromMesh,
             ))
+            .with_children(|parent| {
+                // parent.spawn(Thinker::build().label("My Second Thinker"));
+
+                // parent.spawn(
+                //     (
+                //         Mesh3d(meshes.add(Cuboid::default())),
+                //         Transform::from_translation(Vec3::new(10.0, -10.0, 10.0)),
+                //         MeshMaterial3d(mat_clone),
+                //     )
+                // );
+
+                // parent.spawn((
+                //     Node {
+                //         position_type: PositionType::Absolute,
+                //         ..default()
+                //     },
+                //     GlobalZIndex(1),
+                //     Nameplate,
+                // ))
+                // .with_children(|parent| {
+                //     parent.spawn((
+                //         Text::new("Perceptual Roughness"),
+                //         TextFont {
+                //             font_size: 30.0,
+                //             ..default()
+                //         },
+                //     ));
+                // });
+            })
             .observe(move |_over: Trigger<Pointer<Over>>| {
                 info!("YOOO {name_clone}!");
-            })
-            .add_child(combat);
+            });
     };
 
     for (position, color, name) in generate_targets(NUM_TARGETS) {

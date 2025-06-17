@@ -1,4 +1,5 @@
 use crate::common::{Enemy, Player};
+use avian3d::prelude::*;
 use bevy::prelude::*;
 
 pub struct ProjectilePlugin;
@@ -14,11 +15,11 @@ impl Plugin for ProjectilePlugin {
 }
 
 const MAX_DISTANCE: f32 = 10000.0;
-const BULLET_SPEED: f32 = 200.0;
+pub const BULLET_SPEED: f32 = 200.0;
 const FIRE_RATE: f32 = 0.02;
 
 #[derive(Resource)]
-struct ProjectileTimer(Timer);
+pub struct ProjectileTimer(pub Timer);
 
 #[derive(Component)]
 pub struct Projectile {
