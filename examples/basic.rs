@@ -7,11 +7,11 @@ use bevy_inspector_egui::quick::WorldInspectorPlugin;
 use bevy_third_person_camera::{
     Offset, ThirdPersonCamera, ThirdPersonCameraPlugin, ThirdPersonCameraTarget, Zoom,
 };
-use big_brain::prelude::FirstToScore;
+use big_brain::prelude::{FirstToScore, HighestToScore};
 use big_brain::thinker::Thinker;
 use space::combat::{
     Approach, Approaching, Approachy, Attack, Attacking, Attacky, CombatPlugin, MissileAttack,
-    Missily,
+    MissileLoadout, Missily,
 };
 use space::common::{Enemy, Player};
 use space::movement::MovementPlugin;
@@ -132,9 +132,11 @@ fn spawn_targets(
                     speed: 0.5,
                 },
                 Attacking(player),
+                MissileLoadout { ammo: 50 },
                 Thinker::build()
                     .label("My Thinker")
                     .picker(FirstToScore { threshold: 0.5 })
+                    // .picker(HighestToScore::default())
                     .when(
                         Approachy,
                         Approach {

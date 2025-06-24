@@ -15,7 +15,7 @@ impl Plugin for CombatPlugin {
             .register_type::<Attacky>()
             .register_type::<Score>()
             .register_type::<Missily>()
-            .insert_resource(MissileTimer(Timer::from_seconds(0.8, TimerMode::Repeating)))
+            .insert_resource(MissileTimer(Timer::from_seconds(0.5, TimerMode::Repeating)))
             .add_systems(
                 Update,
                 (
@@ -114,9 +114,9 @@ pub fn approachy_scorer_system(
         if let Ok(approaching) = approachings.get(*actor) {
             let score_value = (approaching.distance / 100.0).clamp(0.0, 1.0);
             score.set(score_value);
-            // span.span().in_scope(|| {
-            //     info!("Aproach score is Score: {}", score_value);
-            // });
+            span.span().in_scope(|| {
+                info!("Approach score is Score: {}", score_value);
+            });
         }
     }
 }
@@ -218,17 +218,34 @@ fn attack_action_system(
 #[derive(Clone, Reflect, Component, Debug, ScorerBuilder)]
 pub struct Missily;
 
+#[derive(Clone, Reflect, Component, Debug)]
+pub struct MissileLoadout {
+    pub ammo: i32,
+}
+
 pub fn missile_scorer_system(
-    attackings: Query<&Approaching>,
+    attackings: Query<(&Approaching, &MissileLoadout)>,
     mut query: Query<(&Actor, &mut Score, &ScorerSpan), With<Missily>>,
 ) {
     for (Actor(actor), mut score, span) in &mut query {
-        if let Ok(attacking) = attackings.get(*actor) {
-            let score_value = (20.0 / attacking.distance).clamp(0.0, 1.0);
-            score.set(score_value);
-            // span.span().in_scope(|| {
-            //     info!("Attack score is Score: {}", score_value);
-            // });
+        if let Ok((
+            Approaching {
+                distance,
+                target: _,
+                speed: _,
+            },
+            MissileLoadout { ammo },
+        )) = attackings.get(*actor)
+        {
+            if *ammo <= 0 {
+                score.set(0.0);
+            } else {
+                let score_value = (20.0 / distance).clamp(0.0, 1.0);
+                score.set(score_value);
+                span.span().in_scope(|| {
+                    info!("Missile Attack score: {}", score_value);
+                });
+            }
         }
     }
 }
@@ -243,7 +260,7 @@ pub struct MissileTimer(pub Timer);
 
 fn missile_action_system(
     mut actors: Query<(&Actor, &mut ActionState, &MissileAttack, &ActionSpan)>,
-    attackers: Query<(&Attacking, &Approaching, &Transform)>,
+    attackers: Query<(&Attacking, &Approaching, &MissileLoadout)>,
     targets: Query<(&Name, &Transform), Without<Attacking>>,
     // mut commands: Commands,
     // time: Res<Time>,
@@ -252,7 +269,8 @@ fn missile_action_system(
     // mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     for (Actor(actor), mut state, action, _) in actors.iter_mut() {
-        let (Attacking(target), approaching, _) = attackers.get(*actor).unwrap();
+        let (Attacking(target), approaching, MissileLoadout { ammo }) =
+            attackers.get(*actor).unwrap();
 
         let (target_name, _) = targets.get(*target).unwrap();
 
@@ -264,6 +282,10 @@ fn missile_action_system(
             ActionState::Executing => {
                 if approaching.distance > action.min_distance {
                     info!("Too far! Stopping attack");
+                    *state = ActionState::Success;
+                }
+                if *ammo <= 0 {
+                    info!("Out of ammo!");
                     *state = ActionState::Success;
                 }
             }
@@ -288,11 +310,12 @@ fn fire_missile(
     time: Res<Time>,
     mut timer: ResMut<MissileTimer>,
     actors: Query<&Actor, With<MissileAttack>>,
-    attackers: Query<(&Attacking, &Transform)>,
+    mut attackers: Query<(&Name, &Attacking, &mut MissileLoadout, &Transform)>,
 ) {
     for Actor(actor) in actors.iter() {
         if timer.0.tick(time.delta()).just_finished() {
-            let (Attacking(target), attacker_transform) = attackers.get(*actor).unwrap();
+            let (name, Attacking(target), mut missile_loadout, attacker_transform) =
+                attackers.get_mut(*actor).unwrap();
 
             let missile_material = materials.add(StandardMaterial {
                 base_color: Color::from(RED),
@@ -309,6 +332,9 @@ fn fire_missile(
                 Missile { target: *target },
                 PickingBehavior::IGNORE,
             ));
+
+            missile_loadout.ammo -= 1;
+            info!("{name} has {:?} missiles left", missile_loadout.ammo);
         }
     }
 }
