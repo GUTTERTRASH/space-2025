@@ -3,15 +3,17 @@ use bevy::log::LogPlugin;
 use bevy::picking::pointer::PointerInteraction;
 use bevy::prelude::*;
 use bevy_inspector_egui::bevy_egui::EguiPlugin;
-use bevy_inspector_egui::quick::WorldInspectorPlugin;
+use bevy_inspector_egui::prelude::*;
+use bevy_inspector_egui::quick::{ResourceInspectorPlugin, WorldInspectorPlugin};
 use bevy_third_person_camera::{
     Offset, ThirdPersonCamera, ThirdPersonCameraPlugin, ThirdPersonCameraTarget, Zoom,
 };
 use big_brain::prelude::{FirstToScore, HighestToScore};
+use big_brain::scorers::{FixedScore, Score};
 use big_brain::thinker::Thinker;
 use space::combat::{
     Approach, Approaching, Approachy, Attack, Attacking, Attacky, CombatPlugin, MissileAttack,
-    MissileLoadout, Missily,
+    MissileLoadout, Missily, MIN_DISTANCE,
 };
 use space::common::{Enemy, Player};
 use space::movement::MovementPlugin;
@@ -40,11 +42,10 @@ fn main() {
             MovementPlugin,
             ProjectilePlugin,
             CombatPlugin,
-            EguiPlugin,
-            WorldInspectorPlugin::new(),
+            WorldInspectorPlugin::default(),
         ))
-        .insert_resource(ClearColor(Color::from(GRAY_500)))
         // .insert_resource(ClearColor(Color::from(BLACK)))
+        .insert_resource(ClearColor(Color::from(GRAY_500)))
         .insert_resource(AmbientLight {
             color: Color::WHITE,
             brightness: 10.0,
@@ -52,9 +53,16 @@ fn main() {
         .insert_resource(Gravity(Vec3::ZERO))
         .add_systems(
             Startup,
-            (spawn_camera, spawn_lights, spawn_player, spawn_targets).chain(),
+            (
+                spawn_camera,
+                spawn_lights,
+                spawn_player,
+                spawn_targets,
+                spawn_scorecard,
+            )
+                .chain(),
         )
-        .add_systems(Update, draw_mesh_intersections)
+        .add_systems(Update, (draw_mesh_intersections, update_ui))
         .run();
 }
 
@@ -132,15 +140,16 @@ fn spawn_targets(
                     speed: 0.5,
                 },
                 Attacking(player),
-                MissileLoadout { ammo: 50 },
+                MissileLoadout { ammo: 20 },
                 Thinker::build()
                     .label("My Thinker")
-                    .picker(FirstToScore { threshold: 0.5 })
-                    // .picker(HighestToScore::default())
+                    // .picker(FirstToScore { threshold: 0.3 })
+                    // .picker(HighestToScore::new(0.3)
+                    .picker(HighestToScore::default())
                     .when(
                         Approachy,
                         Approach {
-                            until_distance: 20.0,
+                            until_distance: MIN_DISTANCE,
                         },
                     )
                     .when(Attacky, Attack { min_distance: 30.0 })
@@ -226,5 +235,62 @@ fn draw_mesh_intersections(pointers: Query<&PointerInteraction>, mut gizmos: Giz
     {
         gizmos.sphere(point, 0.05, RED_500);
         gizmos.arrow(point, point + normal.normalize() * 0.5, PINK_100);
+    }
+}
+
+#[derive(Component)]
+pub struct ScoreText;
+
+fn spawn_scorecard(mut commands: Commands) {
+    let font = TextFont {
+        font_size: 15.0,
+        ..default()
+    };
+
+    commands
+        .spawn(Node {
+            width: Val::Percent(100.0),
+            height: Val::Percent(100.0),
+            flex_direction: FlexDirection::Column,
+            justify_content: JustifyContent::End,
+            align_items: AlignItems::FlexStart,
+            padding: UiRect::all(Val::Px(20.0)),
+            ..default()
+        })
+        .with_children(|builder| {
+            builder.spawn((Text::new("Score "), font.clone(), ScoreText));
+            // builder.spawn((Text::new(""), font.clone(), FatigueText));
+            // builder.spawn((Text::new(""), font.clone(), InventoryText));
+        });
+}
+
+fn update_ui(
+    actor_query: Query<(&Name, &Approaching)>,
+    approach_score_query: Query<&Score, With<Approachy>>,
+    attack_score_query: Query<&Score, With<Attacky>>,
+    missile_score_query: Query<&Score, With<Missily>>,
+    // Our queries must be "disjoint", so we use the `Without` component to
+    // ensure that we do not query for the same entity twice.
+    mut score_text_query: Query<&mut Text, (With<ScoreText>,)>,
+) {
+
+    let approach_score = approach_score_query.get_single()
+            .map(|x| x.get())
+            .unwrap_or(0.0);
+
+    let attack_score = attack_score_query.get_single()
+        .map(|x| x.get())
+        .unwrap_or(0.0);
+
+    let missile_score = missile_score_query.get_single()
+        .map(|x| x.get())
+        .unwrap_or(0.0);
+        
+    let mut score_text = score_text_query.single_mut();
+    for (name, approaching) in &actor_query {
+        score_text.0 = format!(
+            "Name: {name}\nDistance: {}\nApproach:{}\nAttack:{}\nMissle:{}",
+            approaching.distance, approach_score, attack_score, missile_score
+        );
     }
 }

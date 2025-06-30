@@ -1,3 +1,5 @@
+use std::f32::MIN;
+
 use bevy::{color::palettes::css::RED, prelude::*};
 use big_brain::prelude::*;
 use rand::Rng;
@@ -15,7 +17,7 @@ impl Plugin for CombatPlugin {
             .register_type::<Attacky>()
             .register_type::<Score>()
             .register_type::<Missily>()
-            .insert_resource(MissileTimer(Timer::from_seconds(0.5, TimerMode::Repeating)))
+            .insert_resource(MissileTimer(Timer::from_seconds(0.1, TimerMode::Repeating)))
             .add_systems(
                 Update,
                 (
@@ -38,6 +40,8 @@ impl Plugin for CombatPlugin {
             );
     }
 }
+
+pub const MIN_DISTANCE: f32 = 30.0;
 
 #[derive(Component, Reflect)]
 pub struct Approaching {
@@ -112,11 +116,18 @@ pub fn approachy_scorer_system(
 ) {
     for (Actor(actor), mut score, span) in &mut query {
         if let Ok(approaching) = approachings.get(*actor) {
-            let score_value = (approaching.distance / 100.0).clamp(0.0, 1.0);
-            score.set(score_value);
-            span.span().in_scope(|| {
-                info!("Approach score is Score: {}", score_value);
-            });
+
+            if approaching.distance > MIN_DISTANCE {
+                score.set(0.5);
+            } else {
+                score.set(0.0);
+            }
+
+            // let score_value = (approaching.distance / MIN_DISTANCE).clamp(0.0, 1.0);
+            // score.set(score_value);
+            // span.span().in_scope(|| {
+            //     info!("Approach score is Score: {}", score_value);
+            // });
         }
     }
 }
@@ -134,8 +145,15 @@ pub fn attacky_scorer_system(
 ) {
     for (Actor(actor), mut score, span) in &mut query {
         if let Ok(attacking) = attackings.get(*actor) {
-            let score_value = (10.0 / attacking.distance).clamp(0.0, 1.0);
-            score.set(score_value);
+
+            if attacking.distance <= MIN_DISTANCE {
+                score.set(0.6);
+            } else {
+                score.set(0.0);
+            }
+
+            // let score_value = (MIN_DISTANCE / attacking.distance).clamp(0.0, 1.0);
+            // score.set(score_value);
             // span.span().in_scope(|| {
             //     info!("Attack score is Score: {}", score_value);
             // });
@@ -172,7 +190,7 @@ fn attack_action_system(
                 ActionState::Executing => {
                     if approaching.distance > attack.min_distance {
                         info!("Too far! Stopping attack");
-                        *state = ActionState::Success;
+                        // *state = ActionState::Success;
                     } else {
                         if timer.0.tick(time.delta()).just_finished() {
                             let bullet_material = materials.add(StandardMaterial {
@@ -240,11 +258,11 @@ pub fn missile_scorer_system(
             if *ammo <= 0 {
                 score.set(0.0);
             } else {
-                let score_value = (20.0 / distance).clamp(0.0, 1.0);
+                let score_value = (2.0 * MIN_DISTANCE / distance).clamp(0.0, 1.0);
                 score.set(score_value);
-                span.span().in_scope(|| {
-                    info!("Missile Attack score: {}", score_value);
-                });
+                // span.span().in_scope(|| {
+                //     info!("Missile Attack score: {}", score_value);
+                // });
             }
         }
     }
