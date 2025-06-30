@@ -41,7 +41,7 @@ impl Plugin for CombatPlugin {
     }
 }
 
-pub const MIN_DISTANCE: f32 = 30.0;
+pub const MIN_DISTANCE: f32 = 10.0;
 
 #[derive(Component, Reflect)]
 pub struct Approaching {
@@ -116,7 +116,6 @@ pub fn approachy_scorer_system(
 ) {
     for (Actor(actor), mut score, span) in &mut query {
         if let Ok(approaching) = approachings.get(*actor) {
-
             if approaching.distance > MIN_DISTANCE {
                 score.set(0.5);
             } else {
@@ -145,18 +144,11 @@ pub fn attacky_scorer_system(
 ) {
     for (Actor(actor), mut score, span) in &mut query {
         if let Ok(attacking) = attackings.get(*actor) {
-
             if attacking.distance <= MIN_DISTANCE {
                 score.set(0.6);
             } else {
                 score.set(0.0);
             }
-
-            // let score_value = (MIN_DISTANCE / attacking.distance).clamp(0.0, 1.0);
-            // score.set(score_value);
-            // span.span().in_scope(|| {
-            //     info!("Attack score is Score: {}", score_value);
-            // });
         }
     }
 }
