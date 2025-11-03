@@ -3,6 +3,7 @@ use std::f32::MIN;
 use bevy::{color::palettes::css::RED, prelude::*};
 use big_brain::prelude::*;
 use rand::Rng;
+use std::f32::consts::TAU;
 
 use crate::projectile::{BULLET_SPEED, Projectile, ProjectileTimer};
 
@@ -68,15 +69,36 @@ pub struct Approach {
 }
 
 fn approach_action_system(
-    mut approachings: Query<(&mut Approaching, &mut Transform)>,
+    mut commands: Commands,
+    mut approachings: Query<(Entity, &mut Approaching, &mut Transform, Option<&ApproachOffset>)>,
     mut query: Query<(&Actor, &mut ActionState, &Approach, &ActionSpan)>,
     targets: Query<&Transform, Without<Approaching>>,
 ) {
     for (Actor(actor), mut state, approach, span) in query.iter_mut() {
         let _guard = span.span().enter();
 
-        if let Ok((mut approaching, mut transform)) = approachings.get_mut(*actor) {
+        if let Ok((entity, mut approaching, mut transform, maybe_offset)) =
+            approachings.get_mut(*actor)
+        {
             let target = targets.get(approaching.target).unwrap();
+
+            // Ensure each approaching enemy has a small random offset from the target so
+            // multiple enemies don't all converge to the exact same position.
+            // We lazily insert `ApproachOffset` the first time we need it to avoid changing spawn sites.
+            let mut offset_vec = if let Some(offset) = maybe_offset {
+                offset.0
+            } else {
+                // Generate a random position on the XZ plane around the target
+                let mut rng = rand::thread_rng();
+                let angle = rng.gen_range(0.0..TAU);
+                let radius = rng.gen_range(1.5..4.0);
+                let off = Vec3::new(angle.cos() * radius, 0.0, angle.sin() * radius);
+                // Insert the offset component so future frames reuse it
+                commands.entity(entity).insert(ApproachOffset(off));
+                off
+            };
+
+            let aim = target.translation + offset_vec;
 
             match *state {
                 ActionState::Requested => {
@@ -85,12 +107,12 @@ fn approach_action_system(
                 }
                 ActionState::Executing => {
                     if approaching.distance > approach.until_distance {
-                        // info!("Approaching target...");
-                        let direction = (target.translation - transform.translation).normalize();
+                        // Move toward the aim point (target + per-entity offset)
+                        let direction = (aim - transform.translation).normalize();
                         let movement = direction * approaching.speed;
                         approaching.distance -= movement.length();
                         transform.translation += movement;
-                        transform.look_at(target.translation, Vec3::Y);
+                        transform.look_at(aim, Vec3::Y);
                     } else {
                         info!("Reached target distance, ending approach...");
                         *state = ActionState::Success;
@@ -105,6 +127,9 @@ fn approach_action_system(
         }
     }
 }
+
+#[derive(Component)]
+pub struct ApproachOffset(pub Vec3);
 
 #[derive(Clone, Reflect, Component, Debug, ScorerBuilder)]
 pub struct Approachy;
