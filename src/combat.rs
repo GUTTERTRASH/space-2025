@@ -19,6 +19,7 @@ impl Plugin for CombatPlugin {
             .register_type::<Score>()
             .register_type::<Missily>()
             .insert_resource(MissileTimer(Timer::from_seconds(0.1, TimerMode::Repeating)))
+            .insert_resource(SeparationPositions(Vec::new()))
             .add_systems(
                 Update,
                 (
@@ -26,6 +27,9 @@ impl Plugin for CombatPlugin {
                     // orbit_target,
                     fire_missile,
                     missile_approach,
+                    // collect positions then apply separation to avoid per-frame query conflicts
+                    collect_positions_system,
+                    separation_system,
                 ),
             )
             .add_systems(
@@ -43,6 +47,10 @@ impl Plugin for CombatPlugin {
 }
 
 pub const MIN_DISTANCE: f32 = 10.0;
+
+// Separation tuning
+pub const SEPARATION_DISTANCE: f32 = 2.0;
+pub const SEPARATION_STRENGTH: f32 = 1.5;
 
 #[derive(Component, Reflect)]
 pub struct Approaching {
@@ -416,6 +424,60 @@ fn missile_approach(
 
         // transform.translation = next_pos;
         // //
+    }
+}
+
+#[derive(Resource)]
+pub struct SeparationPositions(pub Vec<(Entity, Vec3)>);
+
+/// Collect current positions for all approaching actors. This runs before `separation_system`
+fn collect_positions_system(
+    mut positions: ResMut<SeparationPositions>,
+    query: Query<(Entity, &Transform), With<Approaching>>,
+) {
+    positions.0.clear();
+    for (e, t) in query.iter() {
+        positions.0.push((e, t.translation));
+    }
+}
+
+/// Apply a small repulsion between nearby approaching actors so they don't clump.
+fn separation_system(
+    mut query: Query<(Entity, &mut Transform), With<Approaching>>,
+    positions: Res<SeparationPositions>,
+    time: Res<Time>,
+) {
+    if positions.0.is_empty() {
+        return;
+    }
+
+    for (entity, mut transform) in query.iter_mut() {
+        let my_pos = transform.translation;
+        let mut sep = Vec3::ZERO;
+
+        for (other, other_pos) in positions.0.iter() {
+            if *other == entity {
+                continue;
+            }
+
+            let dist = my_pos.distance(*other_pos);
+            if dist < SEPARATION_DISTANCE && dist > 0.0 {
+                // push away proportional to how close we are
+                let push = (my_pos - *other_pos).normalize()
+                    * SEPARATION_STRENGTH
+                    * ((SEPARATION_DISTANCE - dist) / SEPARATION_DISTANCE);
+                sep += push;
+            }
+        }
+
+        // Clamp the separation to avoid large jumps
+        let max_sep = SEPARATION_STRENGTH;
+        if sep.length() > max_sep {
+            sep = sep.normalize() * max_sep;
+        }
+
+        // Apply over time so effect is frame-rate independent-ish
+    transform.translation += sep * time.delta_secs();
     }
 }
 
