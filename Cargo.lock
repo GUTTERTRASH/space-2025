@@ -4719,6 +4719,8 @@ dependencies = [
  "bevy-inspector-egui",
  "bevy_third_person_camera",
  "big-brain",
+ "objc2 0.5.2",
+ "objc2-foundation 0.2.2",
  "rand",
 ]
 
