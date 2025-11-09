@@ -1,4 +1,5 @@
 use std::f32::MIN;
+use std::collections::HashMap;
 
 use bevy::{color::palettes::css::RED, prelude::*};
 use big_brain::prelude::*;
@@ -19,7 +20,7 @@ impl Plugin for CombatPlugin {
             .register_type::<Score>()
             .register_type::<Missily>()
             .insert_resource(MissileTimer(Timer::from_seconds(0.1, TimerMode::Repeating)))
-            .insert_resource(SeparationPositions(Vec::new()))
+            .insert_resource(SeparationGrid::new(GRID_CELL_SIZE))
             .add_systems(
                 Update,
                 (
@@ -27,9 +28,8 @@ impl Plugin for CombatPlugin {
                     // orbit_target,
                     fire_missile,
                     missile_approach,
-                    // collect positions then apply separation to avoid per-frame query conflicts
-                    collect_positions_system,
-                    separation_system,
+                    // build the spatial grid for separation neighbor queries
+                    build_grid_system,
                 ),
             )
             .add_systems(
@@ -49,8 +49,20 @@ impl Plugin for CombatPlugin {
 pub const MIN_DISTANCE: f32 = 10.0;
 
 // Separation tuning
-pub const SEPARATION_DISTANCE: f32 = 2.0;
-pub const SEPARATION_STRENGTH: f32 = 1.5;
+// Separation tuning
+// Increased separation and strength for clearer spacing with many agents
+pub const SEPARATION_DISTANCE: f32 = 4.0;
+pub const SEPARATION_STRENGTH: f32 = 3.0;
+
+// Steering smoothing (lerp factor for velocity blending; lower -> smoother)
+pub const SEPARATION_SMOOTHING: f32 = 0.18;
+
+// Grid cell size used for spatial partitioning. Slightly larger than separation distance
+pub const GRID_CELL_SIZE: f32 = SEPARATION_DISTANCE * 1.5;
+// Movement scale to convert previous per-frame speeds to per-second velocities.
+// The original code applied `transform.translation += movement` (per-frame). After
+// switching to velocity * delta_seconds, we scale by ~60 to maintain similar feel.
+pub const MOVEMENT_SPEED_SCALE: f32 = 60.0;
 
 #[derive(Component, Reflect)]
 pub struct Approaching {
@@ -78,14 +90,22 @@ pub struct Approach {
 
 fn approach_action_system(
     mut commands: Commands,
-    mut approachings: Query<(Entity, &mut Approaching, &mut Transform, Option<&ApproachOffset>)>,
+    mut approachings: Query<(
+        Entity,
+        &mut Approaching,
+        &mut Transform,
+        Option<&ApproachOffset>,
+        Option<&mut Velocity>,
+    )>,
     mut query: Query<(&Actor, &mut ActionState, &Approach, &ActionSpan)>,
     targets: Query<&Transform, Without<Approaching>>,
+    time: Res<Time>,
+    grid: Res<SeparationGrid>,
 ) {
     for (Actor(actor), mut state, approach, span) in query.iter_mut() {
         let _guard = span.span().enter();
 
-        if let Ok((entity, mut approaching, mut transform, maybe_offset)) =
+        if let Ok((entity, mut approaching, mut transform, maybe_offset, maybe_velocity)) =
             approachings.get_mut(*actor)
         {
             let target = targets.get(approaching.target).unwrap();
@@ -115,12 +135,59 @@ fn approach_action_system(
                 }
                 ActionState::Executing => {
                     if approaching.distance > approach.until_distance {
-                        // Move toward the aim point (target + per-entity offset)
-                        let direction = (aim - transform.translation).normalize();
-                        let movement = direction * approaching.speed;
-                        approaching.distance -= movement.length();
-                        transform.translation += movement;
+                        // Base approach velocity toward the aim point
+                        let my_pos = transform.translation;
+                        let direction = (aim - my_pos).normalize();
+                        let base_vel = direction * approaching.speed;
+
+                        // Gather nearby neighbors using the spatial grid and compute separation
+                        let mut neighbors: Vec<&(Entity, Vec3)> = Vec::with_capacity(16);
+                        grid.neighbors(&my_pos, &mut neighbors);
+
+                        let mut sep = Vec3::ZERO;
+                        for item in neighbors.iter() {
+                            let (other_entity, other_pos) = item;
+                            if *other_entity == entity {
+                                continue;
+                            }
+
+                            let dist = my_pos.distance(*other_pos);
+                            if dist < SEPARATION_DISTANCE && dist > 0.0 {
+                                let push = (my_pos - *other_pos).normalize()
+                                    * SEPARATION_STRENGTH
+                                    * ((SEPARATION_DISTANCE - dist) / SEPARATION_DISTANCE);
+                                sep += push;
+                            }
+                        }
+
+                        // Clamp separation to avoid explosive pushes
+                        let max_sep = SEPARATION_STRENGTH;
+                        if sep.length() > max_sep {
+                            sep = sep.normalize() * max_sep;
+                        }
+
+                        // Desired (unscaled) velocity blends approach + separation
+                        let desired_vel = base_vel + sep;
+
+                        // Convert to per-second velocity using global scale to preserve prior
+                        // per-frame movement feel from the original code.
+                        let desired_vel_per_sec = desired_vel * MOVEMENT_SPEED_SCALE;
+
+                        // Smooth velocity via component (insert on first use)
+                        if let Some(mut vel_comp) = maybe_velocity {
+                            vel_comp.0 = vel_comp.0.lerp(desired_vel_per_sec, SEPARATION_SMOOTHING);
+                            transform.translation += vel_comp.0 * time.delta_secs();
+                        } else {
+                            // First time, insert a velocity component (store per-second velocity)
+                            commands
+                                .entity(entity)
+                                .insert(Velocity(desired_vel_per_sec));
+                            transform.translation += desired_vel_per_sec * time.delta_secs();
+                        }
+
+                        // Update facing and distance
                         transform.look_at(aim, Vec3::Y);
+                        approaching.distance = transform.translation.distance(target.translation);
                     } else {
                         info!("Reached target distance, ending approach...");
                         *state = ActionState::Success;
@@ -427,57 +494,64 @@ fn missile_approach(
     }
 }
 
-#[derive(Resource)]
-pub struct SeparationPositions(pub Vec<(Entity, Vec3)>);
+/// Velocity component used for smooth steering
+#[derive(Component)]
+pub struct Velocity(pub Vec3);
 
-/// Collect current positions for all approaching actors. This runs before `separation_system`
-fn collect_positions_system(
-    mut positions: ResMut<SeparationPositions>,
-    query: Query<(Entity, &Transform), With<Approaching>>,
-) {
-    positions.0.clear();
-    for (e, t) in query.iter() {
-        positions.0.push((e, t.translation));
+/// A simple uniform grid spatial partition for neighbor queries.
+#[derive(Resource)]
+pub struct SeparationGrid {
+    pub cell_size: f32,
+    pub buckets: HashMap<(i32, i32), Vec<(Entity, Vec3)>>,
+}
+
+impl SeparationGrid {
+    pub fn new(cell_size: f32) -> Self {
+        Self {
+            cell_size,
+            buckets: HashMap::new(),
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.buckets.clear();
+    }
+
+    pub fn insert(&mut self, entity: Entity, pos: Vec3) {
+        let key = (
+            (pos.x / self.cell_size).floor() as i32,
+            (pos.z / self.cell_size).floor() as i32,
+        );
+        self.buckets.entry(key).or_default().push((entity, pos));
+    }
+
+    /// Collect neighbors from the 3x3 cells around position (including the cell itself)
+    pub fn neighbors<'a>(&'a self, pos: &Vec3, out: &mut Vec<&'a (Entity, Vec3)>) {
+        out.clear();
+        let cx = (pos.x / self.cell_size).floor() as i32;
+        let cz = (pos.z / self.cell_size).floor() as i32;
+
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                let key = (cx + dx, cz + dz);
+                if let Some(bucket) = self.buckets.get(&key) {
+                    for item in bucket.iter() {
+                        out.push(item);
+                    }
+                }
+            }
+        }
     }
 }
 
-/// Apply a small repulsion between nearby approaching actors so they don't clump.
-fn separation_system(
-    mut query: Query<(Entity, &mut Transform), With<Approaching>>,
-    positions: Res<SeparationPositions>,
-    time: Res<Time>,
+/// Build the spatial grid from current approaching entity positions. This runs each Update.
+fn build_grid_system(
+    mut grid: ResMut<SeparationGrid>,
+    query: Query<(Entity, &Transform), With<Approaching>>,
 ) {
-    if positions.0.is_empty() {
-        return;
-    }
-
-    for (entity, mut transform) in query.iter_mut() {
-        let my_pos = transform.translation;
-        let mut sep = Vec3::ZERO;
-
-        for (other, other_pos) in positions.0.iter() {
-            if *other == entity {
-                continue;
-            }
-
-            let dist = my_pos.distance(*other_pos);
-            if dist < SEPARATION_DISTANCE && dist > 0.0 {
-                // push away proportional to how close we are
-                let push = (my_pos - *other_pos).normalize()
-                    * SEPARATION_STRENGTH
-                    * ((SEPARATION_DISTANCE - dist) / SEPARATION_DISTANCE);
-                sep += push;
-            }
-        }
-
-        // Clamp the separation to avoid large jumps
-        let max_sep = SEPARATION_STRENGTH;
-        if sep.length() > max_sep {
-            sep = sep.normalize() * max_sep;
-        }
-
-        // Apply over time so effect is frame-rate independent-ish
-    transform.translation += sep * time.delta_secs();
+    grid.clear();
+    for (e, t) in query.iter() {
+        grid.insert(e, t.translation);
     }
 }
 
