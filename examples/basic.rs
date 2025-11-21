@@ -6,16 +6,17 @@ use bevy::prelude::*;
 use bevy_inspector_egui::bevy_egui::EguiPlugin;
 use bevy_inspector_egui::prelude::*;
 use bevy_inspector_egui::quick::{ResourceInspectorPlugin, WorldInspectorPlugin};
-use bevy_third_person_camera::{
-    Offset, ThirdPersonCamera, ThirdPersonCameraPlugin, ThirdPersonCameraTarget, Zoom,
-};
-use big_brain::prelude::{FirstToScore, HighestToScore};
-use big_brain::scorers::{FixedScore, Score};
-use big_brain::thinker::Thinker;
-use space::combat::{
-    Approach, Approaching, Approachy, Attack, Attacking, Attacky, CombatPlugin, MIN_DISTANCE,
-    MissileAttack, MissileLoadout, Missily,
-};
+use space::combat::*;
+// use bevy_third_person_camera::{
+//     Offset, ThirdPersonCamera, ThirdPersonCameraPlugin, ThirdPersonCameraTarget, Zoom,
+// };
+// use big_brain::prelude::{FirstToScore, HighestToScore};
+// use big_brain::scorers::{FixedScore, Score};
+// use big_brain::thinker::Thinker;
+// use space::combat::{
+//     Approach, Approaching, Approachy, Attack, Attacking, Attacky, CombatPlugin, MIN_DISTANCE,
+//     MissileAttack, MissileLoadout, Missily,
+// };
 use space::common::{Enemy, Player};
 use space::movement::MovementPlugin;
 use space::projectile::ProjectilePlugin;
@@ -27,7 +28,7 @@ use avian3d::prelude::*;
 #[derive(Component)]
 struct Target;
 
-const NUM_TARGETS: usize = 10;
+const NUM_TARGETS: usize = 1_000;
 
 fn main() {
     App::new()
@@ -36,7 +37,7 @@ fn main() {
                 filter: "big_brain=debug,space=debug".to_string(),
                 ..default()
             }),
-            ThirdPersonCameraPlugin,
+            // ThirdPersonCameraPlugin,
             PhysicsPlugins::default(),
             PhysicsPickingPlugin,
             ReticulePlugin,
@@ -45,11 +46,12 @@ fn main() {
             CombatPlugin,
             // WorldInspectorPlugin::default(),
         ))
-        // .insert_resource(ClearColor(Color::from(BLACK)))
+        // .insert_resource(ClearColor(Color::BLACK))
         .insert_resource(ClearColor(Color::from(GRAY_500)))
         .insert_resource(AmbientLight {
             color: Color::WHITE,
             brightness: 10.0,
+            ..Default::default()
         })
         .insert_resource(Gravity(Vec3::ZERO))
         .add_systems(
@@ -60,22 +62,22 @@ fn main() {
                 spawn_player,
                 spawn_targets,
                 // spawn_scorecard,
-                spawn_nameplate,
+                // spawn_nameplate,
             )
                 .chain(),
         )
-        .add_systems(Update, (draw_mesh_intersections, update_nameplate_positions))
+        .add_systems(Update, (draw_mesh_intersections))
         .run();
 }
 
 fn spawn_camera(mut commands: Commands) {
     commands.spawn((
-        ThirdPersonCamera {
-            offset_enabled: true,
-            offset: Offset::new(0.0, 0.2),
-            zoom: Zoom::new(0.2, 10.0),
-            ..default()
-        },
+        // ThirdPersonCamera {
+        //     offset_enabled: true,
+        //     offset: Offset::new(0.0, 0.2),
+        //     zoom: Zoom::new(0.2, 10.0),
+        //     ..default()
+        // },
         Camera3d::default(),
     ));
 }
@@ -96,12 +98,13 @@ fn spawn_player(
         Mesh3d(assets.load("models/spaceship.gltf#Mesh0/Primitive0")),
         MeshMaterial3d(material_handle.clone()),
         Transform::from_scale(Vec3::new(0.1, 0.1, 0.5)),
-        ThirdPersonCameraTarget,
-        PickingBehavior::IGNORE,
+        // ThirdPersonCameraTarget,
+        // PickingBehavior::IGNORE,
         Player,
         RigidBody::Dynamic,
         ColliderConstructor::TrimeshFromMesh,
         LockedAxes::ROTATION_LOCKED,
+        AiEnemy { position: Vec3::new(0.1, 0.1, 0.5) }
     ));
 }
 
@@ -131,12 +134,12 @@ fn spawn_targets(
         let name_clone2 = name.clone();
 
 
-        let (player, player_transform) = player_query.single();
+        let (player, player_transform) = player_query.single().unwrap();
 
-        let font = TextFont {
-            font_size: 6.0,
-            ..default()
-        };
+        // let font = TextFont {
+        //     font_size: 6.0,
+        //     ..default()
+        // };
 
         let enemy_entity = commands
             .spawn((
@@ -145,25 +148,30 @@ fn spawn_targets(
                 MeshMaterial3d(material),
                 Transform::from_translation(position).with_scale(Vec3::new(0.1, 0.1, 0.5)),
                 Target,
+                AiMarker,
+                Ship { position: Vec3::ZERO, health: 100.0, max_health: 100.0 },
+                Thinker { threshold: 0.3, ..default() },
+                ThreatScore::default(),
+                RangeScore::default(),
                 Enemy::default(),
-                Approaching {
-                    target: player,
-                    distance: player_transform.translation.distance(position),
-                    speed: 0.5,
-                },
-                Attacking(player),
-                MissileLoadout { ammo: 20 },
-                Thinker::build()
-                    .label("My Thinker")
-                    // .picker(FirstToScore { threshold: 0.3 })
-                    // .picker(HighestToScore::new(0.3)
-                    .picker(HighestToScore::default())
-                    .when(
-                        Approachy,
-                        Approach {
-                            until_distance: MIN_DISTANCE,
-                        },
-                    ),
+                // Approaching {
+                //     target: player,
+                //     distance: player_transform.translation.distance(position),
+                //     speed: 0.5,
+                // },
+                // Attacking(player),
+                // MissileLoadout { ammo: 20 },
+                // Thinker::build()
+                //     .label("My Thinker")
+                //     // .picker(FirstToScore { threshold: 0.3 })
+                //     // .picker(HighestToScore::new(0.3)
+                //     .picker(HighestToScore::default())
+                //     .when(
+                //         Approachy,
+                //         Approach {
+                //             until_distance: MIN_DISTANCE,
+                //         },
+                //     ),
                 // .when(Attacky, Attack { min_distance: 30.0 })
                 // .when(Missily, MissileAttack { min_distance: 60.0 }),
                 // RigidBody::Dynamic,
@@ -206,32 +214,32 @@ fn spawn_targets(
                 info!("YOOO {name_clone}!");
             }).id();
 
-        commands
-            .spawn((
-                Node {
-                    // width: Val::Percent(100.0),
-                    // height: Val::Percent(100.0),
-                    position_type: PositionType::Absolute,
-                    flex_direction: FlexDirection::Column,
-                    align_items: AlignItems::Center,
-                    // flex_direction: FlexDirection::Column,
-                    // justify_content: JustifyContent::End,
-                    // align_items: AlignItems::FlexStart,
-                    padding: UiRect::all(Val::Px(20.0)),
-                    ..default()
-                },
-                // BackgroundColor(BLUE.into()),
-                GlobalZIndex(100),
-                Nameplate {
-                    target_entity: enemy_entity,
-                    offset: Vec3::new(0.0, 0.8, 0.0),
-                },
-            ))
-            .with_children(|builder| {
-                builder.spawn(
-                   ( Text::new(name_clone2), font.clone())
-                );
-            });
+        // commands
+        //     .spawn((
+        //         Node {
+        //             // width: Val::Percent(100.0),
+        //             // height: Val::Percent(100.0),
+        //             position_type: PositionType::Absolute,
+        //             flex_direction: FlexDirection::Column,
+        //             align_items: AlignItems::Center,
+        //             // flex_direction: FlexDirection::Column,
+        //             // justify_content: JustifyContent::End,
+        //             // align_items: AlignItems::FlexStart,
+        //             padding: UiRect::all(Val::Px(20.0)),
+        //             ..default()
+        //         },
+        //         // BackgroundColor(BLUE.into()),
+        //         GlobalZIndex(100),
+        //         // Nameplate {
+        //         //     target_entity: enemy_entity,
+        //         //     offset: Vec3::new(0.0, 0.8, 0.0),
+        //         // },
+        //     ))
+        //     .with_children(|builder| {
+        //         builder.spawn(
+        //            ( Text::new(name_clone2), font.clone())
+        //         );
+        //     });
     };
 
     for (position, color, name) in generate_targets(NUM_TARGETS) {
@@ -248,53 +256,53 @@ fn spawn_targets(
     }
 }
 
-fn spawn_nameplate(mut commands: Commands) {
+// fn spawn_nameplate(mut commands: Commands) {
 
-    // let font = TextFont {
-    //     font_size: 10.0,
-    //     ..default()
-    // };
+//     // let font = TextFont {
+//     //     font_size: 10.0,
+//     //     ..default()
+//     // };
 
-    // commands
-    //     .spawn((
-    //         Node {
-    //             // width: Val::Percent(100.0),
-    //             // height: Val::Percent(100.0),
-    //             flex_direction: FlexDirection::Column,
-    //             justify_content: JustifyContent::End,
-    //             align_items: AlignItems::FlexStart,
-    //             padding: UiRect::all(Val::Px(20.0)),
-    //             ..default()
-    //         },
-    //         BackgroundColor(BLUE.into()),
-    //     ))
-    //     .with_children(|builder| {
-    //         builder.spawn((Text::new("Score "), font.clone(), Nameplate));
-    //         // builder.spawn((Text::new(""), font.clone(), FatigueText));
-    //         // builder.spawn((Text::new(""), font.clone(), InventoryText));
-    //     });
-}
+//     // commands
+//     //     .spawn((
+//     //         Node {
+//     //             // width: Val::Percent(100.0),
+//     //             // height: Val::Percent(100.0),
+//     //             flex_direction: FlexDirection::Column,
+//     //             justify_content: JustifyContent::End,
+//     //             align_items: AlignItems::FlexStart,
+//     //             padding: UiRect::all(Val::Px(20.0)),
+//     //             ..default()
+//     //         },
+//     //         BackgroundColor(BLUE.into()),
+//     //     ))
+//     //     .with_children(|builder| {
+//     //         builder.spawn((Text::new("Score "), font.clone(), Nameplate));
+//     //         // builder.spawn((Text::new(""), font.clone(), FatigueText));
+//     //         // builder.spawn((Text::new(""), font.clone(), InventoryText));
+//     //     });
+// }
 
-fn update_nameplate_positions(
-    mut nameplate_query: Query<(&mut Node, &Nameplate)>,
-    enemy_query: Query<&Transform, (With<Enemy>, Without<Nameplate>)>,
-    camera_query: Query<(&Camera, &GlobalTransform)>,
-) {
-    let Ok((camera, camera_transform)) = camera_query.get_single() else {
-        return;
-    };
+// fn update_nameplate_positions(
+//     mut nameplate_query: Query<(&mut Node, &Nameplate)>,
+//     enemy_query: Query<&Transform, (With<Enemy>, Without<Nameplate>)>,
+//     camera_query: Query<(&Camera, &GlobalTransform)>,
+// ) {
+//     let Ok((camera, camera_transform)) = camera_query.single() else {
+//         return;
+//     };
 
-    for (mut style, nameplate) in nameplate_query.iter_mut() {
-        if let Ok(enemy_transform) = enemy_query.get(nameplate.target_entity) {
-            let world_pos = enemy_transform.translation + nameplate.offset;
+//     for (mut style, nameplate) in nameplate_query.iter_mut() {
+//         if let Ok(enemy_transform) = enemy_query.get(nameplate.target_entity) {
+//             let world_pos = enemy_transform.translation + nameplate.offset;
             
-            if let Ok(screen_pos) = camera.world_to_viewport(camera_transform, world_pos) {
-                style.left = Val::Px(screen_pos.x - 30.0); // Adjust centering as needed
-                style.top = Val::Px(screen_pos.y);
-            }
-        }
-    }
-}
+//             if let Ok(screen_pos) = camera.world_to_viewport(camera_transform, world_pos) {
+//                 style.left = Val::Px(screen_pos.x - 30.0); // Adjust centering as needed
+//                 style.top = Val::Px(screen_pos.y);
+//             }
+//         }
+//     }
+// }
 
 fn spawn_lights(mut commands: Commands) {
     let theta = std::f32::consts::FRAC_PI_4;
@@ -384,35 +392,35 @@ fn spawn_scorecard(mut commands: Commands) {
         });
 }
 
-fn update_ui(
-    actor_query: Query<(&Name, &Approaching)>,
-    approach_score_query: Query<&Score, With<Approachy>>,
-    attack_score_query: Query<&Score, With<Attacky>>,
-    missile_score_query: Query<&Score, With<Missily>>,
-    // Our queries must be "disjoint", so we use the `Without` component to
-    // ensure that we do not query for the same entity twice.
-    mut score_text_query: Query<&mut Text, (With<ScoreText>,)>,
-) {
-    let approach_score = approach_score_query
-        .get_single()
-        .map(|x| x.get())
-        .unwrap_or(0.0);
+// fn update_ui(
+//     actor_query: Query<(&Name, &Approaching)>,
+//     approach_score_query: Query<&Score, With<Approachy>>,
+//     attack_score_query: Query<&Score, With<Attacky>>,
+//     missile_score_query: Query<&Score, With<Missily>>,
+//     // Our queries must be "disjoint", so we use the `Without` component to
+//     // ensure that we do not query for the same entity twice.
+//     mut score_text_query: Query<&mut Text, (With<ScoreText>,)>,
+// ) {
+//     let approach_score = approach_score_query
+//         .get_single()
+//         .map(|x| x.get())
+//         .unwrap_or(0.0);
 
-    let attack_score = attack_score_query
-        .get_single()
-        .map(|x| x.get())
-        .unwrap_or(0.0);
+//     let attack_score = attack_score_query
+//         .get_single()
+//         .map(|x| x.get())
+//         .unwrap_or(0.0);
 
-    let missile_score = missile_score_query
-        .get_single()
-        .map(|x| x.get())
-        .unwrap_or(0.0);
+//     let missile_score = missile_score_query
+//         .get_single()
+//         .map(|x| x.get())
+//         .unwrap_or(0.0);
 
-    let mut score_text = score_text_query.single_mut();
-    for (name, approaching) in &actor_query {
-        score_text.0 = format!(
-            "Name: {name}\nDistance: {}\nApproach:{}\nAttack:{}\nMissle:{}",
-            approaching.distance, approach_score, attack_score, missile_score
-        );
-    }
-}
+//     let mut score_text = score_text_query.single_mut();
+//     for (name, approaching) in &actor_query {
+//         score_text.0 = format!(
+//             "Name: {name}\nDistance: {}\nApproach:{}\nAttack:{}\nMissle:{}",
+//             approaching.distance, approach_score, attack_score, missile_score
+//         );
+//     }
+// }

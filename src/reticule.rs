@@ -28,7 +28,7 @@ fn draw_reticule(
                 justify_content: JustifyContent::FlexStart,
                 ..default()
             },
-            PickingBehavior::IGNORE,
+            // PickingBehavior::IGNORE,
         ))
         .with_children(|parent| {
             parent.spawn((

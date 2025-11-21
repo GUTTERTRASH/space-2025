@@ -90,7 +90,7 @@ fn fire_bullet(
                 ..Default::default()
             });
 
-            let camera_transform = camera_query.single();
+            let camera_transform = camera_query.single().cloned().unwrap();
             let player_global_transform = player_query.single();
             let direction = camera_transform.forward().normalize();
 
@@ -98,14 +98,14 @@ fn fire_bullet(
                 Mesh3d(meshes.add(Cuboid::default())),
                 MeshMaterial3d(bullet_material),
                 Transform::from_scale(Vec3::new(0.1, 0.1, 8.0))
-                    .with_translation(player_global_transform.translation() + direction * 10.0)
+                    .with_translation(player_global_transform.unwrap().translation() + direction * 10.0)
                     .with_rotation(camera_transform.rotation),
                 Name::new("Bullet"),
                 Projectile {
                     velocity: direction * BULLET_SPEED,
                     power: 1.0,
                 },
-                PickingBehavior::IGNORE,
+                // PickingBehavior::IGNORE,
             ));
         }
     }
@@ -117,7 +117,7 @@ fn update_bullet(
     mut query: Query<(&mut Transform, &Projectile, Entity), Without<Player>>,
     player: Query<&Transform, With<Player>>,
 ) {
-    let Ok(player_transform) = player.get_single() else {
+    let Ok(player_transform) = player.single() else {
         return;
     };
 

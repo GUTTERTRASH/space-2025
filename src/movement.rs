@@ -1,14 +1,16 @@
 use avian3d::math::*;
 use avian3d::prelude::*;
 use bevy::prelude::*;
-use bevy_third_person_camera::{ThirdPersonCamera, ThirdPersonCameraTarget};
+// use bevy_third_person_camera::{ThirdPersonCamera, ThirdPersonCameraTarget};
 use std::ops::Deref;
+
+use crate::common::Player;
 
 pub struct MovementPlugin;
 
 impl Plugin for MovementPlugin {
     fn build(&self, app: &mut App) {
-        app.add_event::<TranslationEvent>()
+        app.add_message::<TranslationEvent>()
             // .add_event::<RotationEvent>()
             .add_systems(Update, handle_keyboard_input)
             .add_systems(FixedUpdate, (translate_player, dampen_movement).chain());
@@ -17,8 +19,8 @@ impl Plugin for MovementPlugin {
 
 fn handle_keyboard_input(
     keys: Res<ButtonInput<KeyCode>>,
-    camera_query: Query<&Transform, (With<ThirdPersonCamera>, Without<ThirdPersonCameraTarget>)>,
-    mut translations: EventWriter<TranslationEvent>,
+    camera_query: Query<&Transform, Without<Player>>,
+    mut translations: MessageWriter<TranslationEvent>,
     // mut rotations: EventWriter<RotationEvent>,
 ) {
     if !keys.any_pressed([
@@ -32,7 +34,7 @@ fn handle_keyboard_input(
         return;
     }
 
-    let Ok(camera_transform) = camera_query.get_single() else {
+    let Ok(camera_transform) = camera_query.single() else {
         return;
     };
 
@@ -60,11 +62,11 @@ fn handle_keyboard_input(
         .clamp_length_max(1.0);
 
     if direction != Vector3::ZERO {
-        translations.send(TranslationEvent::new(&direction));
+        translations.write(TranslationEvent::new(&direction));
     }
 }
 
-#[derive(Event, Debug, Default)]
+#[derive(Message, Event, Debug, Default)]
 pub struct TranslationEvent {
     value: Vec3,
 }
@@ -85,13 +87,13 @@ impl TranslationEvent {
 
 fn translate_player(
     time: Res<Time>,
-    mut events: EventReader<TranslationEvent>,
-    mut query: Query<&mut LinearVelocity, With<ThirdPersonCameraTarget>>,
+    mut events: MessageReader<TranslationEvent>,
+    mut query: Query<&mut LinearVelocity, With<Player>>,
 ) {
     let delta_time = time.delta_secs_f64().adjust_precision();
     let acceleration = 30.0;
 
-    let Ok(mut linear_velocity) = query.get_single_mut() else {
+    let Ok(mut linear_velocity) = query.single_mut() else {
         return;
     };
 
@@ -102,7 +104,7 @@ fn translate_player(
 
 fn dampen_movement(
     keys: Res<ButtonInput<KeyCode>>,
-    mut query: Query<&mut LinearVelocity, With<ThirdPersonCameraTarget>>,
+    mut query: Query<&mut LinearVelocity, With<Player>>,
 ) {
     if keys.any_pressed([
         KeyCode::KeyW,
@@ -117,7 +119,7 @@ fn dampen_movement(
 
     let damping_factor = 0.9; // Adjust this value to control the damping speed
 
-    let Ok(mut linear_velocity) = query.get_single_mut() else {
+    let Ok(mut linear_velocity) = query.single_mut() else {
         return;
     };
 
