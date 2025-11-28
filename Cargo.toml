@@ -11,10 +11,13 @@ bevy = "0.17.3"
 # bevy_observed_utility = "0.2.0"
 bevy_egui = "0.38.0"
 bevy-inspector-egui = "0.35"
+egui_plot = "0.34"
+metrics = "0.24.2"
 # big-brain = "0.22.0"
 
 rand = "0.8.5"
 avian3d = "0.4"
+metrics-util = "0.20.0"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Force-enable objc2's relax-sign-encoding to fix macOS 26 crash in winit/objc2-foundation

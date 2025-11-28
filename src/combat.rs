@@ -1,9 +1,17 @@
+use std::sync::Arc;
+use std::sync::Mutex;
+
 use bevy::prelude::*;
 use bevy::color::palettes::css::*;
 use bevy::color::palettes::tailwind::*;
 use bevy_egui::egui::Color32;
 use bevy_egui::*;
 use bevy_egui::egui;
+use metrics::counter;
+use metrics::gauge;
+use metrics::histogram;
+use metrics_util::debugging::DebuggingRecorder;
+use metrics_util::debugging::Snapshotter;
 
 #[derive(Component, Clone, Copy, PartialEq, Debug, Reflect)]
 #[reflect(Component)]
@@ -76,6 +84,8 @@ pub struct CombatPlugin;
 
 impl Plugin for CombatPlugin {
     fn build(&self, app: &mut App) {
+        setup_metrics_snapshotter(app);
+
         app
             .init_resource::<DebugAiViz>()
             .register_type::<AiAction>()
@@ -88,7 +98,10 @@ impl Plugin for CombatPlugin {
             .add_systems(Update, action_system.in_set(AiSet::Actions))
             .add_systems(Update, toggle_ai_viz)
             .add_systems(EguiPrimaryContextPass, ai_debug_dashboard)
-            .add_systems(Update, ai_gizmos_system.run_if(resource_equals(DebugAiViz(true))));
+            .add_systems(Update, ai_gizmos_system.run_if(resource_equals(DebugAiViz(true))))
+            .add_systems(Startup, setup_metrics_history)
+            .add_systems(Update, update_metrics_history)
+            .add_systems(EguiPrimaryContextPass, custom_metrics_egui);
     }
 }
 
@@ -120,6 +133,10 @@ fn threat_scorer_system(
             let health_norm = 1.0 - (ship.health / ship.max_health);  // 1.0 = low HP
             score.0 = (dist_norm * health_norm * 0.6).clamp(0.0, 1.0);
 
+            let entity_id = ship as *const Ship as usize;
+            let threat_gauge = gauge!("ai.threat_score", "entity-id" => format!("{}", entity_id));
+            threat_gauge.set(score.0);
+
         }
 
   
@@ -140,7 +157,10 @@ fn range_scorer_system(
             0.4
         } else {
             0.0
-        }
+        };
+        let entity_id = ship as *const Ship as usize;
+        let threat_gauge = gauge!("ai.range_score", "entity-id" => format!("{}", entity_id));
+        threat_gauge.set(score.0);
     });
 }
 
@@ -149,6 +169,10 @@ fn picker_system(
     mut query: Query<(&ThreatScore, &RangeScore, &mut Thinker), With<AiMarker>>,
 ) {
     for (threat, range, mut thinker) in &mut query.iter_mut() {
+
+        gauge!("ai.threat2").set(threat.0 as f64);
+        gauge!("ai.range2").set(range.0 as f64);
+
         let num_actions = 4;  // AiAction count
         let mut scores = vec![0.2; num_actions];  // Baseline for Idle
 
@@ -156,6 +180,9 @@ fn picker_system(
         scores[AiAction::SeekTarget as usize] = threat.0 * 0.7 + range.0 * 0.3;
         scores[AiAction::Evade as usize] = threat.0 * 1.2;  // Boost urgency
         scores[AiAction::Fire as usize] = range.0;
+
+        gauge!("ai.action_score", "action" => "seek").set(scores[AiAction::SeekTarget as usize] as f64);
+        gauge!("ai.action_score", "action" => "evade").set(scores[AiAction::Evade as usize] as f64);
 
         // Pick highest above threshold
         let mut best_idx = 0;
@@ -169,10 +196,14 @@ fn picker_system(
 
         let new_action = unsafe { std::mem::transmute(best_idx as u8) };
         if new_action != thinker.current_action {
+            counter!("ai.action_switches").increment(1);
             thinker.current_action = new_action;
             thinker.scores = scores;  // Cache for debug
             // Optional: Spawn event for action change
         }
+
+        histogram!("ai.score_dist").record(best_score as f64);
+
     }
 }
 
@@ -364,4 +395,132 @@ fn get_action_color(action_idx: u8) -> egui::Color32 {
         3 => egui::Color32::YELLOW,    // Fire
         _ => egui::Color32::WHITE,
     }
+}
+
+
+
+
+
+
+
+
+// Resource for buffering plot data (e.g., threat over time)
+#[derive(Resource, Default)]
+struct MetricsHistory {
+    threat_history: Arc<Mutex<Vec<(f64, f64)>>>,  // (time, value)
+    max_points: usize,  // e.g., 100 for rolling window
+}
+
+#[cfg(debug_assertions)]
+pub fn setup_metrics_history(mut commands: Commands) {
+    commands.insert_resource(MetricsHistory {
+        threat_history: Arc::new(Mutex::new(Vec::new())),
+        max_points: 100,
+    });
+}
+
+#[cfg(debug_assertions)]
+fn update_metrics_history(
+    history: Res<MetricsHistory>,
+    time: Res<Time>,
+    threat_query: Query<&ThreatScore, With<AiMarker>>,
+) {
+    if let Some(threat) = threat_query.iter().next() {  // Avg or first for demo
+        let mut hist = history.threat_history.lock().unwrap();
+        hist.push((time.elapsed_secs_f64(), threat.0 as f64));
+        if hist.len() > history.max_points {
+            hist.remove(0);  // Rolling window
+        }
+    }
+}
+
+#[derive(Resource)]
+struct MetricsSnapshotter(Arc<Snapshotter>);
+
+#[cfg(debug_assertions)]
+pub fn setup_metrics_snapshotter(app: &mut App) {  // Call in plugin build
+    let recorder = DebuggingRecorder::default();
+    let snapshotter = Arc::new(recorder.snapshotter());
+
+    metrics::set_global_recorder(recorder);
+
+    // Install as a layer (non-destructive)
+    // Note: Use Snapshotter::default(); integrate with your metrics setup as needed
+    app.insert_resource(MetricsSnapshotter(snapshotter));
+}
+
+#[cfg(debug_assertions)]
+pub fn custom_metrics_egui(
+    mut contexts: EguiContexts,
+    snapshotter: Res<MetricsSnapshotter>,
+    history: Res<MetricsHistory>,  // Your existing buffer resource
+) {
+    let ctx = match contexts.ctx_mut() {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+
+    egui::Window::new("📊 Custom Metrics Dashboard").show(ctx, |ui| {
+        use egui_plot::{Line, Plot, PlotPoints};
+
+        ui.label("Live Metrics Snapshot");
+        ui.separator();
+
+        // Capture snapshot
+        let snapshot = snapshotter.0.snapshot();
+
+        // Table for current gauges/counters (filter to ai.*)
+        let mut ai_metrics = vec![];
+        for (composite_key, _, _, metric) in snapshot.into_vec() {
+            if composite_key.key().name().starts_with("ai.") {
+                use metrics_util::debugging::DebugValue;
+                match metric {
+                    DebugValue::Gauge(v) => ai_metrics.push((composite_key.key().name().to_string(), *v as f32)),
+                    DebugValue::Counter(v) => ai_metrics.push((composite_key.key().name().to_string(), v as f32)),  // Treat as f32 for display
+                    _ => {}  // Skip histograms for table; plot separately
+                }
+            }
+        }
+
+        // Sort by name for consistency
+        ai_metrics.sort_by(|a, b| a.0.cmp(&b.0));
+
+        egui::Grid::new("metrics_grid")
+            .num_columns(2)
+            .spacing([20.0, 4.0])
+            .show(ui, |ui| {
+                for (name, value) in ai_metrics {
+                    ui.label(&name);
+                    ui.add(egui::ProgressBar::new(value.clamp(0.0, 1.0)));  // Normalize for bar
+                    ui.end_row();
+                }
+            });
+
+        ui.separator();
+        ui.label("Threat Score Trend (Time-Series Plot)");
+
+        // Plot (unchanged from before)
+        let hist = history.threat_history.lock().unwrap();
+        let points: PlotPoints = hist.iter().cloned().map(|(t, v)| [t, v]).collect();
+        let line = Line::new("Threat", points);
+
+        Plot::new("threat_plot")
+            .view_aspect(2.0)
+            .show(ui, |plot_ui| plot_ui.line(line));
+
+        // Histogram example (if you recorded one)
+        // if let Some((composite_key, _, _, metric)) = snapshot.into_vec().iter().find(|(composite_key, _, _, _)| composite_key.key().name() == "ai.score_dist") {
+        //     // Render as simple bars (egui doesn't have built-in hist; approximate)
+        //     ui.label("Score Distribution (Buckets)");
+        //     egui::ScrollArea::horizontal().show(ui, |ui| {
+        //         for bucket in metric.value().as_histogram_buckets() {  // Pseudo; adapt from DebugValue
+        //             ui.add(egui::ProgressBar::new(bucket.count as f32 / 10.0));  // Normalize
+        //         }
+        //     });
+        // }
+
+        if ui.button("Capture New Snapshot").clicked() {
+            // Force a snapshot (already live)
+        }
+    });
 }
