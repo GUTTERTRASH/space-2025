@@ -28,7 +28,7 @@ use avian3d::prelude::*;
 #[derive(Component)]
 struct Target;
 
-const NUM_TARGETS: usize = 1_000;
+const NUM_TARGETS: usize = 1;
 
 fn main() {
     App::new()
@@ -44,7 +44,8 @@ fn main() {
             MovementPlugin,
             ProjectilePlugin,
             CombatPlugin,
-            // WorldInspectorPlugin::default(),
+            EguiPlugin::default(),
+            WorldInspectorPlugin::default()
         ))
         // .insert_resource(ClearColor(Color::BLACK))
         .insert_resource(ClearColor(Color::from(GRAY_500)))
@@ -79,6 +80,8 @@ fn spawn_camera(mut commands: Commands) {
         //     ..default()
         // },
         Camera3d::default(),
+        // Move the camera back along the +Z axis by 10 units so the scene is visible
+        Transform::from_translation(Vec3::new(0.0, 1.0, 5.0)),
     ));
 }
 
@@ -104,7 +107,7 @@ fn spawn_player(
         RigidBody::Dynamic,
         ColliderConstructor::TrimeshFromMesh,
         LockedAxes::ROTATION_LOCKED,
-        AiEnemy { position: Vec3::new(0.1, 0.1, 0.5) }
+        AiEnemy { position: Vec3::new(0.0, 0.0, 0.0) }
     ));
 }
 
@@ -149,7 +152,7 @@ fn spawn_targets(
                 Transform::from_translation(position).with_scale(Vec3::new(0.1, 0.1, 0.5)),
                 Target,
                 AiMarker,
-                Ship { position: Vec3::ZERO, health: 100.0, max_health: 100.0 },
+                Ship { position: position, health: 100.0, max_health: 100.0 },
                 Thinker { threshold: 0.3, ..default() },
                 ThreatScore::default(),
                 RangeScore::default(),
@@ -244,12 +247,13 @@ fn spawn_targets(
 
     for (position, color, name) in generate_targets(NUM_TARGETS) {
         spawn_cube(
-            position
-                - Vec3 {
-                    x: 0.0,
-                    y: 0.0,
-                    z: 200.0,
-                },
+            Vec3 { x: 0.0, y: 0.0, z: -10.0 },
+            // position
+            //     - Vec3 {
+            //         x: 0.0,
+            //         y: 0.0,
+            //         z: 10.0,
+            //     },
             color,
             name,
         );
