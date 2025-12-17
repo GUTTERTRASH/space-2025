@@ -486,12 +486,14 @@ pub fn custom_metrics_egui(
         ai_metrics.sort_by(|a, b| a.0.cmp(&b.0));
 
         egui::Grid::new("metrics_grid")
-            .num_columns(2)
+            .num_columns(3)
             .spacing([20.0, 4.0])
             .show(ui, |ui| {
                 for (name, value) in ai_metrics {
                     ui.label(&name);
-                    ui.add(egui::ProgressBar::new(value.clamp(0.0, 1.0)));  // Normalize for bar
+                    let clamped_value = value.clamp(0.0, 1.0);
+                    ui.add(egui::ProgressBar::new(clamped_value));  // Normalize for bar
+                    ui.label(format!("{:.3}", value));
                     ui.end_row();
                 }
             });
