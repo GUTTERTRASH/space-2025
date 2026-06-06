@@ -4,6 +4,7 @@ use bevy::prelude::*;
 // use bevy_third_person_camera::{ThirdPersonCamera, ThirdPersonCameraTarget};
 use std::ops::Deref;
 
+use crate::common::MainCamera;
 use crate::common::Player;
 
 pub struct MovementPlugin;
@@ -19,7 +20,7 @@ impl Plugin for MovementPlugin {
 
 fn handle_keyboard_input(
     keys: Res<ButtonInput<KeyCode>>,
-    camera_query: Query<&Transform, Without<Player>>,
+    camera_query: Query<&Transform, With<MainCamera>>,
     mut translations: MessageWriter<TranslationEvent>,
     // mut rotations: EventWriter<RotationEvent>,
 ) {
@@ -35,6 +36,7 @@ fn handle_keyboard_input(
     }
 
     let Ok(camera_transform) = camera_query.single() else {
+        warn!("Camera not found");
         return;
     };
 

@@ -14,3 +14,6 @@ impl Default for Enemy {
         Self { health: 100.0 }
     }
 }
+
+#[derive(Component)]
+pub struct MainCamera;

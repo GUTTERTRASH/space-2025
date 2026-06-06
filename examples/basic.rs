@@ -1,11 +1,10 @@
-use bevy::color::palettes::css::BLUE;
 use bevy::color::palettes::tailwind::{GRAY_500, PINK_100, RED_500};
 use bevy::log::LogPlugin;
+use bevy::ecs::observer::On;
 use bevy::picking::pointer::PointerInteraction;
 use bevy::prelude::*;
 use bevy_inspector_egui::bevy_egui::EguiPlugin;
-use bevy_inspector_egui::prelude::*;
-use bevy_inspector_egui::quick::{ResourceInspectorPlugin, WorldInspectorPlugin};
+use bevy_inspector_egui::quick::WorldInspectorPlugin;
 use space::combat::*;
 // use bevy_third_person_camera::{
 //     Offset, ThirdPersonCamera, ThirdPersonCameraPlugin, ThirdPersonCameraTarget, Zoom,
@@ -17,7 +16,7 @@ use space::combat::*;
 //     Approach, Approaching, Approachy, Attack, Attacking, Attacky, CombatPlugin, MIN_DISTANCE,
 //     MissileAttack, MissileLoadout, Missily,
 // };
-use space::common::{Enemy, Player};
+use space::common::{Enemy, MainCamera, Player};
 use space::movement::MovementPlugin;
 use space::projectile::ProjectilePlugin;
 use space::reticule::ReticulePlugin;
@@ -49,7 +48,7 @@ fn main() {
         ))
         // .insert_resource(ClearColor(Color::BLACK))
         .insert_resource(ClearColor(Color::from(GRAY_500)))
-        .insert_resource(AmbientLight {
+        .insert_resource(GlobalAmbientLight {
             color: Color::WHITE,
             brightness: 10.0,
             ..Default::default()
@@ -67,7 +66,7 @@ fn main() {
             )
                 .chain(),
         )
-        .add_systems(Update, (draw_mesh_intersections))
+        .add_systems(Update, draw_mesh_intersections)
         .run();
 }
 
@@ -79,8 +78,8 @@ fn spawn_camera(mut commands: Commands) {
         //     zoom: Zoom::new(0.2, 10.0),
         //     ..default()
         // },
+        MainCamera,
         Camera3d::default(),
-        // Move the camera back along the +Z axis by 10 units so the scene is visible
         Transform::from_translation(Vec3::new(0.0, 1.0, 5.0)),
     ));
 }
@@ -107,7 +106,7 @@ fn spawn_player(
         RigidBody::Dynamic,
         ColliderConstructor::TrimeshFromMesh,
         LockedAxes::ROTATION_LOCKED,
-        AiEnemy { position: Vec3::new(0.0, 0.0, 0.0) }
+        AiEnemy,
     ));
 }
 
@@ -134,17 +133,17 @@ fn spawn_targets(
         });
 
         let name_clone = name.clone();
-        let name_clone2 = name.clone();
+        let _name_clone2 = name.clone();
 
 
-        let (player, player_transform) = player_query.single().unwrap();
+        let (_player, _player_transform) = player_query.single().unwrap();
 
         // let font = TextFont {
         //     font_size: 6.0,
         //     ..default()
         // };
 
-        let enemy_entity = commands
+        let _enemy_entity = commands
             .spawn((
                 Name::new(name),
                 Mesh3d(assets.load("models/spaceship.gltf#Mesh0/Primitive0")),
@@ -152,11 +151,15 @@ fn spawn_targets(
                 Transform::from_translation(position).with_scale(Vec3::new(0.1, 0.1, 0.5)),
                 Target,
                 AiMarker,
-                Ship { position: position, health: 100.0, max_health: 100.0 },
+                Ship { health: 100.0, max_health: 100.0 },
                 Thinker { threshold: 0.3, ..default() },
                 ThreatScore::default(),
                 RangeScore::default(),
                 Enemy::default(),
+                // Lightweight kinematic for scale (100s of enemies possible).
+                // Player stays full Dynamic + Trimesh for feel. See physics decision in todos.
+                RigidBody::Kinematic,
+                LinearVelocity::default(),
                 // Approaching {
                 //     target: player,
                 //     distance: player_transform.translation.distance(position),
@@ -213,7 +216,7 @@ fn spawn_targets(
             //     //     builder.spawn((Text::new("FFF FFF"), font.clone()));
             //     // });
             // })
-            .observe(move |_over: Trigger<Pointer<Over>>| {
+            .observe(move |_over: On<Pointer<Over>>| {
                 info!("YOOO {name_clone}!");
             }).id();
 
@@ -247,13 +250,7 @@ fn spawn_targets(
 
     for (position, color, name) in generate_targets(NUM_TARGETS) {
         spawn_cube(
-            Vec3 { x: 0.0, y: 0.0, z: -10.0 },
-            // position
-            //     - Vec3 {
-            //         x: 0.0,
-            //         y: 0.0,
-            //         z: 10.0,
-            //     },
+            position,
             color,
             name,
         );
@@ -371,8 +368,10 @@ fn draw_mesh_intersections(pointers: Query<&PointerInteraction>, mut gizmos: Giz
 }
 
 #[derive(Component)]
+#[allow(dead_code)]
 pub struct ScoreText;
 
+#[allow(dead_code)]
 fn spawn_scorecard(mut commands: Commands) {
     let font = TextFont {
         font_size: 15.0,

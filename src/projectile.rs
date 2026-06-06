@@ -1,5 +1,4 @@
 use crate::common::{Enemy, Player};
-use avian3d::prelude::*;
 use bevy::prelude::*;
 
 pub struct ProjectilePlugin;

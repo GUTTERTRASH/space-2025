@@ -3,8 +3,8 @@ use std::sync::Mutex;
 
 use bevy::prelude::*;
 use bevy::color::palettes::css::*;
-use bevy::color::palettes::tailwind::*;
-use bevy_egui::egui::Color32;
+
+use avian3d::prelude::LinearVelocity;
 use bevy_egui::*;
 use bevy_egui::egui;
 use metrics::counter;
@@ -53,16 +53,13 @@ pub struct AiMarker;
 
 #[derive(Component)]
 pub struct Ship {
-    pub position: Vec3,
     pub health: f32,
     pub max_health: f32,
 }
 
 
 #[derive(Component)]
-pub struct AiEnemy {
-    pub position: Vec3,
-}
+pub struct AiEnemy;
 
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, SystemSet)]
@@ -73,6 +70,7 @@ pub enum AiSet {
 }
 
 #[derive(Component)]
+#[allow(dead_code)]
 struct AiDebugLabel;
 
 
@@ -100,20 +98,20 @@ impl Plugin for CombatPlugin {
             .add_systems(EguiPrimaryContextPass, ai_debug_dashboard)
             .add_systems(Update, ai_gizmos_system.run_if(resource_equals(DebugAiViz(true))))
             .add_systems(Startup, setup_metrics_history)
-            .add_systems(Update, update_metrics_history)
-            .add_systems(EguiPrimaryContextPass, custom_metrics_egui);
+            .add_systems(Update, update_metrics_history);
+            // .add_systems(EguiPrimaryContextPass, custom_metrics_egui);
     }
 }
 
 
 fn threat_scorer_system(
-    mut query: Query<(&Ship, &mut ThreatScore), With<AiMarker>>,
-    enemies: Query<&AiEnemy>,
+    mut query: Query<(&Ship, &Transform, &mut ThreatScore), With<AiMarker>>,
+    enemies: Query<&Transform, With<AiEnemy>>,
 ) {
 
-    let enemy_positions: Vec<Vec3> = enemies.iter().map(|e| e.position).collect();
+    let enemy_positions: Vec<Vec3> = enemies.iter().map(|e| e.translation).collect();
 
-    query.par_iter_mut().for_each(|(ship, mut score)| {
+    query.par_iter_mut().for_each(|(ship, ship_transform, mut score)| {
 
         if enemy_positions.is_empty() {
 
@@ -124,7 +122,7 @@ fn threat_scorer_system(
 
             let closest_dist = enemy_positions
                 .iter()
-                .map(|&pos| ship.position.distance(pos))
+                .map(|&pos| ship_transform.translation.distance(pos))
                 .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
                 .unwrap_or(f32::MAX);
 
@@ -147,12 +145,12 @@ fn threat_scorer_system(
 
 // Range Scorer: Similar parallel pattern
 fn range_scorer_system(
-    mut query: Query<(&Ship, &mut RangeScore), With<AiMarker>>,
-    enemies: Query<&AiEnemy>,
+    mut query: Query<(&Ship, &Transform, &mut RangeScore), With<AiMarker>>,
+    enemies: Query<&Transform, With<AiEnemy>>,
 ) {
-    let enemy_positions: Vec<Vec3> = enemies.iter().map(|e| e.position).collect();
-    query.par_iter_mut().for_each(|(ship, mut score)| {
-        let in_range = enemy_positions.iter().any(|&pos| ship.position.distance(pos) <= 50.0);
+    let enemy_positions: Vec<Vec3> = enemies.iter().map(|e| e.translation).collect();
+    query.par_iter_mut().for_each(|(ship, ship_transform, mut score)| {
+        let in_range = enemy_positions.iter().any(|&pos| ship_transform.translation.distance(pos) <= 50.0);
         score.0 = if in_range {
             0.4
         } else {
@@ -170,16 +168,21 @@ fn picker_system(
 ) {
     for (threat, range, mut thinker) in &mut query.iter_mut() {
 
-        gauge!("ai.threat2").set(threat.0 as f64);
-        gauge!("ai.range2").set(range.0 as f64);
-
         let num_actions = 4;  // AiAction count
         let mut scores = vec![0.2; num_actions];  // Baseline for Idle
 
         // Map scores to actions (tune weights/curves here)
-        scores[AiAction::SeekTarget as usize] = threat.0 * 0.7 + range.0 * 0.3;
-        scores[AiAction::Evade as usize] = threat.0 * 1.2;  // Boost urgency
-        scores[AiAction::Fire as usize] = range.0;
+        //
+        // Current issue: threat is 0 when the AI ship is at full health (see health_norm in threat_scorer).
+        // This made Seek score very low (0.12), while Fire got the full range (0.4) > threshold → picker chose Fire (or Idle).
+        // Fire action does nothing, so no movement.
+        //
+        // For basic arcade "chase the player" behavior, give Seek strong weight from range (proximity).
+        // We still keep threat contribution for future "I'm damaged → maybe be more cautious / evade".
+        scores[AiAction::SeekTarget as usize] = range.0 * 0.9 + threat.0 * 0.3;
+        scores[AiAction::Evade as usize] = threat.0 * 0.9;   // lower than before
+        scores[AiAction::Fire as usize] = range.0 * 0.5;     // only consider firing when strongly in range
+
 
         gauge!("ai.action_score", "action" => "seek").set(scores[AiAction::SeekTarget as usize] as f64);
         gauge!("ai.action_score", "action" => "evade").set(scores[AiAction::Evade as usize] as f64);
@@ -209,36 +212,44 @@ fn picker_system(
 
 
 fn action_system(
-    mut query: Query<(&mut Ship, &Thinker), With<AiMarker>>,
-    time: Res<Time>,
+    mut query: Query<(&Thinker, &mut Transform, &mut LinearVelocity), With<AiMarker>>,
+    enemies: Query<&Transform, (With<AiEnemy>, Without<AiMarker>)>,
+    _time: Res<Time>,
 ) {
-    query.par_iter_mut().for_each(|(mut ship, thinker)| {
-        if thinker.current_action != AiAction::Idle {
+    // Collect enemy positions (simple & easy to understand for first pass).
+    // Duplicates logic from scorers; we can extract to a resource later.
+    let enemy_positions: Vec<Vec3> = enemies.iter().map(|t| t.translation).collect();
 
-            match thinker.current_action {
-                AiAction::SeekTarget => {
-                    // info!("Seeking target...");
-                    // Parallel-safe steering (assume closest enemy query cached elsewhere)
-                    // let target_dir = Vec3::X;  // Placeholder: Compute from enemies
-                    // ship.velocity += target_dir.normalize_or_zero() * 50.0 * time.delta_seconds();
-                }
-                AiAction::Evade => {
-                    // info!("Evading...");
-                    // ship.velocity += ship.velocity.any_orthogonal().normalize_or_zero() * 30.0 * time.delta_seconds();
-                }
-                AiAction::Fire => {
-                    // info!("Firing...");
-                    // Spawn projectile (Bevy's spawn is thread-safe via commands)
-                    // commands.spawn(Projectile { .. });
-                }
-                _ => {}
+    for (thinker, mut transform, mut linvel) in &mut query {
+        if thinker.current_action == AiAction::SeekTarget && !enemy_positions.is_empty() {
+            // Find closest threat (same approach as the scorers for conceptual simplicity)
+            if let Some(&closest) = enemy_positions.iter().min_by(|a, b| {
+                transform
+                    .translation
+                    .distance_squared(**a)
+                    .partial_cmp(&transform.translation.distance_squared(**b))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            }) {
+                let dir = (closest - transform.translation).normalize_or_zero();
+
+                // Face the threat — very satisfying in arcade space combat
+                transform.look_at(closest, Vec3::Y);
+
+                // Basic constant speed pursuit (easy to reason about)
+                const SEEK_SPEED: f32 = 18.0;
+                **linvel = dir * SEEK_SPEED;
+
+                info!("AI SeekTarget active — moving toward closest threat at speed {}", SEEK_SPEED);
+
+                // TODO (p1-3): arrival / slowing when close so they don't overshoot the player
             }
-
-            // Physics update (local)
-            // ship.position += ship.velocity * time.delta_seconds();
-
         }
-    });
+
+        // TODO (future actions):
+        // Evade: steer away or perpendicular when threat high
+        // Fire: face target + trigger shooting (will need commands or events)
+        // Idle / other: maybe apply light damping so they don't drift forever
+    }
 }
 
 
@@ -252,18 +263,18 @@ fn toggle_ai_viz(mut viz: ResMut<DebugAiViz>, keys: Res<ButtonInput<KeyCode>>) {
 
 fn ai_gizmos_system(
     mut gizmos: Gizmos,
-    ai_query: Query<(&Ship, &Thinker, &ThreatScore, &RangeScore), With<AiMarker>>,
-    enemies: Query<&AiEnemy>,
+    ai_query: Query<(&Transform, &Ship, &Thinker, &ThreatScore, &RangeScore), With<AiMarker>>,
+    enemies: Query<&Transform, With<AiEnemy>>,
     viz: Res<DebugAiViz>,
 ) {
 
     if !viz.0 { return; }
 
-    let enemy_positions: Vec<Vec3> = enemies.iter().map(|e| e.position).collect();
+    let enemy_positions: Vec<Vec3> = enemies.iter().map(|e| e.translation).collect();
 
-    for (ship, thinker, threat, range) in &ai_query {
+    for (ship_transform, _, thinker, threat, range) in &ai_query {
 
-        let pos = ship.position;
+        let pos = ship_transform.translation;
         let radius = 3.0 + range.0 + 15.0;
 
         let ring_color = match thinker.current_action {
@@ -293,7 +304,7 @@ fn ai_gizmos_system(
                 pos.distance_squared(**a).partial_cmp(&pos.distance_squared(**b)).unwrap()
             }) {
                 // gizmos.line(pos, closest, Color::WHITE);
-                gizmos.arrow(pos, (pos - closest).normalize(), Color::from(WHITE));
+                gizmos.arrow(pos, closest, Color::from(WHITE));
             }
         }
 
@@ -350,34 +361,38 @@ fn ai_debug_dashboard(
                 ui.group(|ui| {
                     ui.horizontal(|ui| {
                         ui.strong(format!("Entity #{}: {:?}", entity.index(), thinker.current_action));
-                        if ui.button("📋 Inspect").clicked() {
-                            // Optional: Integrate inspector focus (advanced)
-                        }
+                        // if ui.button("📋 Inspect").clicked() {
+                        //     // Optional: Integrate inspector focus (advanced)
+                        // }
                     });
 
                     // Threat/Range rows
                     ui.horizontal(|ui| {
                         ui.label("Threat:");
-                        ui.add(egui::ProgressBar::new(threat.0).fill(Color32::from_rgba_unmultiplied(255, 77, 77, 255)));
+                        // ui.add(egui::ProgressBar::new(threat.0).fill(Color32::from_rgba_unmultiplied(255, 77, 77, 255)));
                         ui.label(format!("{:.2}", threat.0));
                     });
+                    
                     ui.horizontal(|ui| {
                         ui.label("Range:");
-                        ui.add(egui::ProgressBar::new(range.0).fill(Color32::from_rgba_unmultiplied(77, 255, 77, 255)));
+                        // ui.add(egui::ProgressBar::new(range.0).fill(Color32::from_rgba_unmultiplied(77, 255, 77, 255)));
                         ui.label(format!("{:.2}", range.0));
                     });
 
+                    ui.separator();
+
                     // All action scores as bars
-                    ui.horizontal_wrapped(|ui| {
+                    // ui.horizontal_wrapped(|ui| {
                         for (i, score) in thinker.scores.iter().enumerate() {
                             let clamped = score.clamp(0.0, 1.0);
-                            ui.vertical(|ui| {
+                            ui.horizontal(|ui| {
                                 ui.label(action_names[i]);
-                                let bar = egui::ProgressBar::new(clamped);
-                                ui.add(bar.fill(get_action_color(i as u8)));  // Define below
+                                // let bar = egui::ProgressBar::new(clamped);
+                                // ui.add(bar.fill(get_action_color(i as u8)));  // Define below
+                                ui.label(format!("{:.2}", clamped));
                             });
                         }
-                    });
+                    // });
 
                     ui.label(format!("Threshold: {:.2}", thinker.threshold));
                     ui.separator();
@@ -387,6 +402,7 @@ fn ai_debug_dashboard(
     });
 }
 
+#[allow(dead_code)]
 fn get_action_color(action_idx: u8) -> egui::Color32 {
     match action_idx {
         0 => egui::Color32::GRAY,      // Idle
@@ -442,7 +458,7 @@ pub fn setup_metrics_snapshotter(app: &mut App) {  // Call in plugin build
     let recorder = DebuggingRecorder::default();
     let snapshotter = Arc::new(recorder.snapshotter());
 
-    metrics::set_global_recorder(recorder);
+    let _ = metrics::set_global_recorder(recorder);
 
     // Install as a layer (non-destructive)
     // Note: Use Snapshotter::default(); integrate with your metrics setup as needed
@@ -450,7 +466,8 @@ pub fn setup_metrics_snapshotter(app: &mut App) {  // Call in plugin build
 }
 
 #[cfg(debug_assertions)]
-pub fn custom_metrics_egui(
+#[cfg(debug_assertions)]
+fn custom_metrics_egui(
     mut contexts: EguiContexts,
     snapshotter: Res<MetricsSnapshotter>,
     history: Res<MetricsHistory>,  // Your existing buffer resource
@@ -521,8 +538,8 @@ pub fn custom_metrics_egui(
         //     });
         // }
 
-        if ui.button("Capture New Snapshot").clicked() {
-            // Force a snapshot (already live)
-        }
+        // if ui.button("Capture New Snapshot").clicked() {
+        //     // Force a snapshot (already live)
+        // }
     });
 }
