@@ -1,5 +1,4 @@
 use bevy::prelude::*;
-use bevy::window::PrimaryWindow;
 
 pub struct ReticulePlugin;
 
@@ -9,42 +8,39 @@ impl Plugin for ReticulePlugin {
     }
 }
 
-const VERTICAL_OFFSET: f32 = 4.5;
-const RETICULE_SIZE: f32 = 9.0;
-const RETICULE_HALF_SIZE: f32 = RETICULE_SIZE / 2.0;
+const RETICULE_SIZE: f32 = 18.0; // Slightly larger for better visibility in space games
 
-fn draw_reticule(
-    mut commands: Commands,
-    assets: Res<AssetServer>,
-    primary_window_query: Single<&Window, With<PrimaryWindow>>,
-) {
-    let primary_window = *primary_window_query;
-
+fn draw_reticule(mut commands: Commands, assets: Res<AssetServer>) {
+    // Best practice: Use a full-screen centered container.
+    // This automatically handles window resizes, different aspect ratios,
+    // and is robust across Bevy UI changes. No manual pixel math or startup window query needed.
     commands
         .spawn((
+            Name::new("Reticule Container"),
             Node {
                 width: Val::Percent(100.0),
                 height: Val::Percent(100.0),
-                justify_content: JustifyContent::FlexStart,
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                // Ensure it doesn't interfere with picking / other UI
+                // PickingBehavior::IGNORE,
                 ..default()
             },
-            // PickingBehavior::IGNORE,
         ))
         .with_children(|parent| {
             parent.spawn((
+                Name::new("Reticule"),
                 ImageNode {
                     image: assets.load("images/reticule.png"),
+                    // You can add color tint or alpha here if desired:
+                    // color: Color::srgba(1.0, 1.0, 1.0, 0.85),
                     ..default()
                 },
                 Node {
                     width: Val::Px(RETICULE_SIZE),
                     height: Val::Px(RETICULE_SIZE),
-                    top: Val::Px(
-                        primary_window.height() / 2.0 + RETICULE_HALF_SIZE - VERTICAL_OFFSET,
-                    ),
-                    right: Val::Px(primary_window.width() / 2.0 + RETICULE_HALF_SIZE),
-                    bottom: Val::Px(primary_window.height() / 2.0 - RETICULE_HALF_SIZE),
-                    left: Val::Px(primary_window.width() / 2.0 - RETICULE_HALF_SIZE),
+                    // Optional: small negative margin if you want it perfectly pixel-centered
+                    // margin: UiRect::all(Val::Px(-1.0)),
                     ..default()
                 },
             ));

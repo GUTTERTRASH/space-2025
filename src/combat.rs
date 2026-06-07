@@ -1,6 +1,3 @@
-use std::sync::Arc;
-use std::sync::Mutex;
-
 use bevy::prelude::*;
 use bevy::color::palettes::css::*;
 
@@ -10,8 +7,6 @@ use bevy_egui::egui;
 use metrics::counter;
 use metrics::gauge;
 use metrics::histogram;
-use metrics_util::debugging::DebuggingRecorder;
-use metrics_util::debugging::Snapshotter;
 
 #[derive(Component, Clone, Copy, PartialEq, Debug, Reflect)]
 #[reflect(Component)]
@@ -69,37 +64,32 @@ pub enum AiSet {
     Actions
 }
 
-#[derive(Component)]
-#[allow(dead_code)]
-struct AiDebugLabel;
-
-
 #[derive(Resource, Default, PartialEq)]
 pub struct DebugAiViz(pub bool);
+
+#[derive(Resource, Default, PartialEq)]
+pub struct AiEnabled(pub bool);
 
 pub struct CombatPlugin;
 
 
 impl Plugin for CombatPlugin {
     fn build(&self, app: &mut App) {
-        setup_metrics_snapshotter(app);
-
         app
             .init_resource::<DebugAiViz>()
+            .init_resource::<AiEnabled>()
             .register_type::<AiAction>()
             .register_type::<Thinker>()
             .add_systems(PreUpdate, (
                 threat_scorer_system,
                 range_scorer_system,
-            ).in_set(AiSet::Scorers))
-            .add_systems(PreUpdate, picker_system.in_set(AiSet::Pickers))
-            .add_systems(Update, action_system.in_set(AiSet::Actions))
+            ).in_set(AiSet::Scorers).run_if(resource_equals(AiEnabled(true))))
+            .add_systems(PreUpdate, picker_system.in_set(AiSet::Pickers).run_if(resource_equals(AiEnabled(true))))
+            .add_systems(Update, action_system.in_set(AiSet::Actions).run_if(resource_equals(AiEnabled(true))))
             .add_systems(Update, toggle_ai_viz)
+            .add_systems(Update, toggle_ai_enabled)
             .add_systems(EguiPrimaryContextPass, ai_debug_dashboard)
-            .add_systems(Update, ai_gizmos_system.run_if(resource_equals(DebugAiViz(true))))
-            .add_systems(Startup, setup_metrics_history)
-            .add_systems(Update, update_metrics_history);
-            // .add_systems(EguiPrimaryContextPass, custom_metrics_egui);
+            .add_systems(Update, ai_gizmos_system.run_if(resource_equals(DebugAiViz(true))));
     }
 }
 
@@ -261,6 +251,13 @@ fn toggle_ai_viz(mut viz: ResMut<DebugAiViz>, keys: Res<ButtonInput<KeyCode>>) {
 
 }
 
+fn toggle_ai_enabled(mut enabled: ResMut<AiEnabled>, keys: Res<ButtonInput<KeyCode>>) {
+    if keys.just_pressed(KeyCode::KeyG) {
+        enabled.0 = !enabled.0;
+        info!("AI enabled: {}", enabled.0);
+    }
+}
+
 fn ai_gizmos_system(
     mut gizmos: Gizmos,
     ai_query: Query<(&Transform, &Ship, &Thinker, &ThreatScore, &RangeScore), With<AiMarker>>,
@@ -345,12 +342,14 @@ fn ai_gizmos_system(
 fn ai_debug_dashboard(
     mut contexts: EguiContexts,
     ai_query: Query<(Entity, &Thinker, &ThreatScore, &RangeScore), With<AiMarker>>,
+    enabled: Res<AiEnabled>,
 ) {
     let ctx = match contexts.ctx_mut() {
         Ok(c) => c,
         Err(_) => return,
     };
     egui::Window::new("🧠 Utility AI Debug").show(ctx, |ui| {
+        ui.label(format!("AI Enabled: {}  (press G to toggle)", enabled.0));
         let agents = ai_query.iter().collect::<Vec<_>>();
         ui.label(format!("{} AI Agents Active", agents.len()));
 
@@ -402,16 +401,6 @@ fn ai_debug_dashboard(
     });
 }
 
-#[allow(dead_code)]
-fn get_action_color(action_idx: u8) -> egui::Color32 {
-    match action_idx {
-        0 => egui::Color32::GRAY,      // Idle
-        1 => egui::Color32::CYAN,      // Seek
-        2 => egui::Color32::RED,       // Evade
-        3 => egui::Color32::YELLOW,    // Fire
-        _ => egui::Color32::WHITE,
-    }
-}
 
 
 
@@ -420,126 +409,4 @@ fn get_action_color(action_idx: u8) -> egui::Color32 {
 
 
 
-// Resource for buffering plot data (e.g., threat over time)
-#[derive(Resource, Default)]
-struct MetricsHistory {
-    threat_history: Arc<Mutex<Vec<(f64, f64)>>>,  // (time, value)
-    max_points: usize,  // e.g., 100 for rolling window
-}
 
-#[cfg(debug_assertions)]
-pub fn setup_metrics_history(mut commands: Commands) {
-    commands.insert_resource(MetricsHistory {
-        threat_history: Arc::new(Mutex::new(Vec::new())),
-        max_points: 100,
-    });
-}
-
-#[cfg(debug_assertions)]
-fn update_metrics_history(
-    history: Res<MetricsHistory>,
-    time: Res<Time>,
-    threat_query: Query<&ThreatScore, With<AiMarker>>,
-) {
-    if let Some(threat) = threat_query.iter().next() {  // Avg or first for demo
-        let mut hist = history.threat_history.lock().unwrap();
-        hist.push((time.elapsed_secs_f64(), threat.0 as f64));
-        if hist.len() > history.max_points {
-            hist.remove(0);  // Rolling window
-        }
-    }
-}
-
-#[derive(Resource)]
-struct MetricsSnapshotter(Arc<Snapshotter>);
-
-#[cfg(debug_assertions)]
-pub fn setup_metrics_snapshotter(app: &mut App) {  // Call in plugin build
-    let recorder = DebuggingRecorder::default();
-    let snapshotter = Arc::new(recorder.snapshotter());
-
-    let _ = metrics::set_global_recorder(recorder);
-
-    // Install as a layer (non-destructive)
-    // Note: Use Snapshotter::default(); integrate with your metrics setup as needed
-    app.insert_resource(MetricsSnapshotter(snapshotter));
-}
-
-#[cfg(debug_assertions)]
-#[cfg(debug_assertions)]
-fn custom_metrics_egui(
-    mut contexts: EguiContexts,
-    snapshotter: Res<MetricsSnapshotter>,
-    history: Res<MetricsHistory>,  // Your existing buffer resource
-) {
-    let ctx = match contexts.ctx_mut() {
-        Ok(c) => c,
-        Err(_) => return,
-    };
-
-    egui::Window::new("📊 Custom Metrics Dashboard").show(ctx, |ui| {
-        use egui_plot::{Line, Plot, PlotPoints};
-
-        ui.label("Live Metrics Snapshot");
-        ui.separator();
-
-        // Capture snapshot
-        let snapshot = snapshotter.0.snapshot();
-
-        // Table for current gauges/counters (filter to ai.*)
-        let mut ai_metrics = vec![];
-        for (composite_key, _, _, metric) in snapshot.into_vec() {
-            if composite_key.key().name().starts_with("ai.") {
-                use metrics_util::debugging::DebugValue;
-                match metric {
-                    DebugValue::Gauge(v) => ai_metrics.push((composite_key.key().name().to_string(), *v as f32)),
-                    DebugValue::Counter(v) => ai_metrics.push((composite_key.key().name().to_string(), v as f32)),  // Treat as f32 for display
-                    _ => {}  // Skip histograms for table; plot separately
-                }
-            }
-        }
-
-        // Sort by name for consistency
-        ai_metrics.sort_by(|a, b| a.0.cmp(&b.0));
-
-        egui::Grid::new("metrics_grid")
-            .num_columns(3)
-            .spacing([20.0, 4.0])
-            .show(ui, |ui| {
-                for (name, value) in ai_metrics {
-                    ui.label(&name);
-                    let clamped_value = value.clamp(0.0, 1.0);
-                    ui.add(egui::ProgressBar::new(clamped_value));  // Normalize for bar
-                    ui.label(format!("{:.3}", value));
-                    ui.end_row();
-                }
-            });
-
-        ui.separator();
-        ui.label("Threat Score Trend (Time-Series Plot)");
-
-        // Plot (unchanged from before)
-        let hist = history.threat_history.lock().unwrap();
-        let points: PlotPoints = hist.iter().cloned().map(|(t, v)| [t, v]).collect();
-        let line = Line::new("Threat", points);
-
-        Plot::new("threat_plot")
-            .view_aspect(2.0)
-            .show(ui, |plot_ui| plot_ui.line(line));
-
-        // Histogram example (if you recorded one)
-        // if let Some((composite_key, _, _, metric)) = snapshot.into_vec().iter().find(|(composite_key, _, _, _)| composite_key.key().name() == "ai.score_dist") {
-        //     // Render as simple bars (egui doesn't have built-in hist; approximate)
-        //     ui.label("Score Distribution (Buckets)");
-        //     egui::ScrollArea::horizontal().show(ui, |ui| {
-        //         for bucket in metric.value().as_histogram_buckets() {  // Pseudo; adapt from DebugValue
-        //             ui.add(egui::ProgressBar::new(bucket.count as f32 / 10.0));  // Normalize
-        //         }
-        //     });
-        // }
-
-        // if ui.button("Capture New Snapshot").clicked() {
-        //     // Force a snapshot (already live)
-        // }
-    });
-}
