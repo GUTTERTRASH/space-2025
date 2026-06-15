@@ -2,7 +2,8 @@
 //!
 //! - Mouse freely orbits the camera around the player (independent of ship orientation).
 //! - WASD + Q/E provide 6DOF thrust along camera axes.
-//! - W/S commit the ship heading to the camera look direction and slerp the ship to match.
+//! - W/S commit heading to the camera look direction, slerp the ship, and thrust forward/back.
+//! - A/D commit the same heading, slerp the ship, then strafe once aligned.
 
 use bevy::input::mouse::MouseMotion;
 use bevy::prelude::*;
@@ -53,8 +54,8 @@ pub struct ControllerSettings {
 impl Default for ControllerSettings {
     fn default() -> Self {
         Self {
-            follow_distance: 12.0,
-            follow_height: 3.5,
+            follow_distance: 6.0,
+            follow_height: 1.5,
             mouse_sensitivity: 0.003,
             move_speed: 12.0,
             sprint_multiplier: 2.5,
@@ -88,10 +89,11 @@ struct ShipInput {
     thrusting: bool,
 }
 
-/// Camera heading captured when W or S is first pressed.
+/// Camera heading captured when W, S, A, or D is first pressed.
 #[derive(Resource, Default)]
 struct CommittedHeading {
     forward: Option<Vec3>,
+    right: Option<Vec3>,
     rotation: Option<Quat>,
 }
 
@@ -129,6 +131,7 @@ fn gather_input(
     keys: Res<ButtonInput<KeyCode>>,
     settings: Res<ControllerSettings>,
     camera_state: Res<CameraState>,
+    player: Query<&Transform, With<Player>>,
     mut committed: ResMut<CommittedHeading>,
     mut input: ResMut<ShipInput>,
 ) {
@@ -137,8 +140,12 @@ fn gather_input(
     input.thrusting = false;
 
     let forward_back = keys.pressed(KeyCode::KeyW) || keys.pressed(KeyCode::KeyS);
-    if !forward_back {
+    let strafe = keys.pressed(KeyCode::KeyA) || keys.pressed(KeyCode::KeyD);
+    let heading_keys = forward_back || strafe;
+
+    if !heading_keys {
         committed.forward = None;
+        committed.right = None;
         committed.rotation = None;
     }
 
@@ -158,20 +165,26 @@ fn gather_input(
     let cam_right = camera_basis * Vec3::X;
     let cam_up = Vec3::Y;
 
-    if forward_back && (keys.just_pressed(KeyCode::KeyW) || keys.just_pressed(KeyCode::KeyS)) {
+    let just_committed = keys.just_pressed(KeyCode::KeyW)
+        || keys.just_pressed(KeyCode::KeyS)
+        || keys.just_pressed(KeyCode::KeyA)
+        || keys.just_pressed(KeyCode::KeyD);
+
+    if heading_keys && just_committed {
+        let heading = heading_from_forward(cam_forward);
         committed.forward = Some(cam_forward);
-        committed.rotation = Some(heading_from_forward(cam_forward));
+        committed.right = Some(heading * Vec3::X);
+        committed.rotation = Some(heading);
     }
 
-    let (forward, right, up) = if forward_back {
-        if let (Some(f), Some(r)) = (committed.forward, committed.rotation) {
-            (f, r * Vec3::X, cam_up)
-        } else {
-            (cam_forward, cam_right, cam_up)
-        }
-    } else {
-        (cam_forward, cam_right, cam_up)
-    };
+    let forward = committed.forward.unwrap_or(cam_forward);
+    let right = committed.right.unwrap_or(cam_right);
+    let up = cam_up;
+
+    let aligned = committed
+        .rotation
+        .and_then(|target| player.single().ok().map(|p| is_heading_aligned(p.rotation, target)))
+        .unwrap_or(false);
 
     let mut direction = Vec3::ZERO;
     if keys.pressed(KeyCode::KeyW) {
@@ -180,11 +193,14 @@ fn gather_input(
     if keys.pressed(KeyCode::KeyS) {
         direction -= forward;
     }
-    if keys.pressed(KeyCode::KeyD) {
-        direction += right;
-    }
-    if keys.pressed(KeyCode::KeyA) {
-        direction -= right;
+    // Strafe only after the ship has turned to face the committed camera heading.
+    if strafe && aligned {
+        if keys.pressed(KeyCode::KeyD) {
+            direction += right;
+        }
+        if keys.pressed(KeyCode::KeyA) {
+            direction -= right;
+        }
     }
     if keys.pressed(KeyCode::KeyE) {
         direction += up;
@@ -201,7 +217,7 @@ fn gather_input(
         input.thrusting = true;
     }
 
-    if forward_back {
+    if heading_keys {
         input.heading_target = committed.rotation;
     }
 }
