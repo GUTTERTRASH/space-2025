@@ -8,7 +8,7 @@ use bevy_inspector_egui::quick::WorldInspectorPlugin;
 use space::combat::*;
 use space::common::{Enemy, MainCamera, Player};
 // use space::movement::MovementPlugin; // replaced by ControllerPlugin
-use space::controller::{ControllerPlugin, LookDirection, LookEntity};
+use space::controller::ControllerPlugin;
 use space::projectile::ProjectilePlugin;
 use space::reticule::ReticulePlugin;
 use space::utils::generate_targets;
@@ -60,33 +60,20 @@ fn main() {
 }
 
 fn spawn_camera(mut commands: Commands) {
-    // Initial camera placement follows the SHIP_FORWARD_LOCAL = -Vec3::Z convention
-    // (see controller.rs). With player at identity rotation (forward = world -Z),
-    // "behind" the player is in the positive Z direction.
-    // The ControllerPlugin's update_camera will immediately take over and keep the
-    // camera at a constant distance behind the player's current facing.
-    commands.spawn((
-        MainCamera,
-        Camera3d::default(),
-        Transform::from_translation(Vec3::new(0.0, 3.0, 12.0))
-            .looking_at(Vec3::new(0.0, 0.0, -10.0), Vec3::Y),
-        LookDirection::default(),
-    ));
+    // ControllerPlugin takes over camera placement on the first PostUpdate.
+    commands.spawn((MainCamera, Camera3d::default(), Transform::default()));
 }
 
 fn spawn_player(
     mut commands: Commands,
     assets: Res<AssetServer>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    camera_query: Query<Entity, With<MainCamera>>,
 ) {
     let material_handle = materials.add(StandardMaterial {
         base_color: Color::BLACK,
         reflectance: 1.0,
         ..default()
     });
-
-    let camera = camera_query.single().expect("MainCamera should exist (spawned by spawn_camera)");
 
     commands.spawn((
         Name::new("Player"),
@@ -97,7 +84,7 @@ fn spawn_player(
         RigidBody::Dynamic,
         ColliderConstructor::TrimeshFromMesh,
         AiEnemy,
-        LookEntity(camera),
+        // Note: LinearVelocity + AngularVelocity are provided automatically by the Dynamic rigidbody.
     ));
 }
 
