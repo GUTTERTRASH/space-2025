@@ -1,9 +1,16 @@
-//! Third-person camera and 6DOF ship controller.
+//! Full 6DOF ship controller — arcade space-sim flight model.
 //!
-//! - Mouse freely orbits the camera around the player (independent of ship orientation).
-//! - WASD + Q/E provide 6DOF thrust along camera axes.
-//! - W/S continuously slerp toward the live camera look direction and thrust forward/back.
-//! - A/D commit heading on press, slerp the ship, then strafe once aligned.
+//! - Mouse pitches/yaws the ship directly (flight-stick style), with no pitch clamp:
+//!   the ship can loop and invert freely. Rotation deltas are applied in the ship's
+//!   local frame each tick, so there is no gimbal lock regardless of orientation.
+//! - Q/E roll the ship around its own forward axis.
+//! - W/S/A/D thrust forward/back/strafe left/right in ship-local space; Space/C thrust
+//!   up/down. Thrust builds linear velocity via acceleration (inertia) rather than
+//!   snapping to a target speed, and decays gradually (drift) when released.
+//! - Left Shift boosts the max speed.
+//! - The camera is a rigid third-person chase cam: it always sits at a fixed offset
+//!   behind the ship in the ship's own local frame and matches the ship's rotation
+//!   exactly (it banks and loops with the ship). There is no independent free-look.
 
 use bevy::input::mouse::MouseMotion;
 use bevy::prelude::*;
@@ -12,89 +19,70 @@ use bevy::window::{CursorGrabMode, CursorOptions};
 use crate::common::{MainCamera, Player};
 use avian3d::prelude::{AngularVelocity, LinearVelocity, PhysicsSystems, Rotation};
 
-const PITCH_LIMIT: f32 = std::f32::consts::FRAC_PI_2 - 0.01;
-const HEADING_ALIGNED_DOT: f32 = 0.999;
-
 pub struct ControllerPlugin;
 
 impl Plugin for ControllerPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ControllerSettings>()
-            .init_resource::<CameraState>()
-            .init_resource::<ShipInput>()
-            .init_resource::<CommittedHeading>()
+            .init_resource::<MouseAccum>()
             .add_systems(Startup, setup_cursor)
-            .add_systems(
-                PreUpdate,
-                (mouse_look, gather_input).chain(),
-            )
+            .add_systems(PreUpdate, accumulate_mouse)
             .add_systems(
                 FixedPostUpdate,
                 apply_ship_motion.in_set(PhysicsSystems::Prepare),
             )
-            .add_systems(PostUpdate, update_third_person_camera);
+            .add_systems(PostUpdate, update_chase_camera.in_set(CameraUpdateSet));
     }
 }
+
+/// Runs after the chase camera's `Transform` has been written for this frame.
+/// Anything that needs an up-to-date camera position/rotation this frame
+/// (e.g. the reticule's screen-space projection) should order `.after(CameraUpdateSet)`.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct CameraUpdateSet;
 
 // ── Resources ────────────────────────────────────────────────────────────────
 
 #[derive(Resource)]
 pub struct ControllerSettings {
-    pub follow_distance: f32,
-    pub follow_height: f32,
+    /// Radians of ship rotation per pixel of mouse motion.
     pub mouse_sensitivity: f32,
-    pub move_speed: f32,
-    pub sprint_multiplier: f32,
-    /// Ship heading slerp rate (`slerp(target, rate * dt)`).
-    pub turn_slerp_rate: f32,
-    /// Per physics-tick velocity decay when no thrust keys are held.
-    pub velocity_damping: f32,
+    /// Roll rate in radians/sec while Q/E is held.
+    pub roll_rate: f32,
+    /// Linear thrust acceleration in m/s^2.
+    pub linear_acceleration: f32,
+    /// Maximum linear speed in m/s (before boost).
+    pub max_linear_speed: f32,
+    /// Multiplier applied to `max_linear_speed` while boosting.
+    pub boost_multiplier: f32,
+    /// Exponential velocity decay rate (per second) when no thrust is held.
+    pub linear_damping: f32,
+    /// Camera offset behind the ship, in ship-local space.
+    pub follow_distance: f32,
+    /// Camera offset above the ship, in ship-local space.
+    pub follow_height: f32,
 }
 
 impl Default for ControllerSettings {
     fn default() -> Self {
         Self {
-            follow_distance: 6.0,
-            follow_height: 1.5,
-            mouse_sensitivity: 0.003,
-            move_speed: 12.0,
-            sprint_multiplier: 2.5,
-            turn_slerp_rate: 6.0,
-            velocity_damping: 0.88,
+            mouse_sensitivity: 0.0025,
+            roll_rate: 2.5,
+            linear_acceleration: 40.0,
+            max_linear_speed: 20.0,
+            boost_multiplier: 2.5,
+            linear_damping: 2.5,
+            follow_distance: 8.0,
+            follow_height: 2.5,
         }
     }
 }
 
-/// Camera yaw/pitch — fully independent of the ship.
-#[derive(Resource)]
-pub struct CameraState {
-    pub yaw: f32,
-    pub pitch: f32,
-}
-
-impl Default for CameraState {
-    fn default() -> Self {
-        Self {
-            yaw: 0.0,
-            pitch: 0.0,
-        }
-    }
-}
-
-/// Written in PreUpdate, consumed in FixedPostUpdate.
+/// Mouse motion accumulated in `PreUpdate`, drained by the fixed-step rotation system.
 #[derive(Resource, Default)]
-struct ShipInput {
-    desired_velocity: Vec3,
-    heading_target: Option<Quat>,
-    thrusting: bool,
-}
-
-/// Camera heading captured when A or D is first pressed (strafe turn-then-slide).
-#[derive(Resource, Default)]
-struct CommittedHeading {
-    forward: Option<Vec3>,
-    right: Option<Vec3>,
-    rotation: Option<Quat>,
+struct MouseAccum {
+    yaw: f32,
+    pitch: f32,
 }
 
 // ── Startup ──────────────────────────────────────────────────────────────────
@@ -109,115 +97,14 @@ fn setup_cursor(mut cursor: Query<&mut CursorOptions>) {
 
 // ── Input ────────────────────────────────────────────────────────────────────
 
-fn mouse_look(
+fn accumulate_mouse(
     settings: Res<ControllerSettings>,
-    mut camera_state: ResMut<CameraState>,
+    mut accum: ResMut<MouseAccum>,
     mut motion: MessageReader<MouseMotion>,
 ) {
-    let mut delta = Vec2::ZERO;
     for event in motion.read() {
-        delta -= event.delta;
-    }
-    if delta.length_squared() < 1e-8 {
-        return;
-    }
-
-    delta *= settings.mouse_sensitivity;
-    camera_state.yaw += delta.x;
-    camera_state.pitch = (camera_state.pitch + delta.y).clamp(-PITCH_LIMIT, PITCH_LIMIT);
-}
-
-fn gather_input(
-    keys: Res<ButtonInput<KeyCode>>,
-    settings: Res<ControllerSettings>,
-    camera_state: Res<CameraState>,
-    player: Query<&Transform, With<Player>>,
-    mut committed: ResMut<CommittedHeading>,
-    mut input: ResMut<ShipInput>,
-) {
-    input.desired_velocity = Vec3::ZERO;
-    input.heading_target = None;
-    input.thrusting = false;
-
-    let forward_back = keys.pressed(KeyCode::KeyW) || keys.pressed(KeyCode::KeyS);
-    let strafe = keys.pressed(KeyCode::KeyA) || keys.pressed(KeyCode::KeyD);
-
-    if !strafe {
-        committed.forward = None;
-        committed.right = None;
-        committed.rotation = None;
-    }
-
-    if !keys.any_pressed([
-        KeyCode::KeyW,
-        KeyCode::KeyA,
-        KeyCode::KeyS,
-        KeyCode::KeyD,
-        KeyCode::KeyQ,
-        KeyCode::KeyE,
-    ]) {
-        return;
-    }
-
-    let camera_basis = camera_rotation(&camera_state);
-    let cam_forward = camera_basis * Vec3::NEG_Z;
-    let cam_right = camera_basis * Vec3::X;
-    let cam_up = Vec3::Y;
-
-    if strafe && (keys.just_pressed(KeyCode::KeyA) || keys.just_pressed(KeyCode::KeyD)) {
-        let heading = heading_from_forward(cam_forward);
-        committed.forward = Some(cam_forward);
-        committed.right = Some(heading * Vec3::X);
-        committed.rotation = Some(heading);
-    }
-
-    let strafe_right = committed.right.unwrap_or(cam_right);
-
-    let strafe_aligned = committed
-        .rotation
-        .and_then(|target| player.single().ok().map(|p| is_heading_aligned(p.rotation, target)))
-        .unwrap_or(false);
-
-    let mut direction = Vec3::ZERO;
-    if keys.pressed(KeyCode::KeyW) {
-        direction += cam_forward;
-    }
-    if keys.pressed(KeyCode::KeyS) {
-        direction -= cam_forward;
-    }
-    if keys.pressed(KeyCode::KeyD) {
-        if forward_back {
-            direction += cam_right;
-        } else if strafe_aligned {
-            direction += strafe_right;
-        }
-    }
-    if keys.pressed(KeyCode::KeyA) {
-        if forward_back {
-            direction -= cam_right;
-        } else if strafe_aligned {
-            direction -= strafe_right;
-        }
-    }
-    if keys.pressed(KeyCode::KeyE) {
-        direction += cam_up;
-    }
-    if keys.pressed(KeyCode::KeyQ) {
-        direction -= cam_up;
-    }
-
-    let sprint = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
-    let speed = settings.move_speed * if sprint { settings.sprint_multiplier } else { 1.0 };
-
-    if direction.length_squared() > 0.0 {
-        input.desired_velocity = direction.normalize() * speed;
-        input.thrusting = true;
-    }
-
-    if forward_back {
-        input.heading_target = Some(heading_from_forward(cam_forward));
-    } else if strafe {
-        input.heading_target = committed.rotation;
+        accum.yaw -= event.delta.x * settings.mouse_sensitivity;
+        accum.pitch -= event.delta.y * settings.mouse_sensitivity;
     }
 }
 
@@ -226,36 +113,80 @@ fn gather_input(
 fn apply_ship_motion(
     time: Res<Time<Fixed>>,
     settings: Res<ControllerSettings>,
-    input: Res<ShipInput>,
-    mut query: Query<(&mut LinearVelocity, &mut Rotation, &mut AngularVelocity), With<Player>>,
+    keys: Res<ButtonInput<KeyCode>>,
+    mut accum: ResMut<MouseAccum>,
+    mut query: Query<(&mut LinearVelocity, &mut AngularVelocity, &mut Rotation), With<Player>>,
 ) {
-    let Ok((mut linvel, mut rotation, mut ang_vel)) = query.single_mut() else {
+    let Ok((mut linvel, mut angvel, mut rotation)) = query.single_mut() else {
         return;
     };
+    let dt = time.delta_secs();
 
-    if input.thrusting {
-        linvel.0 = input.desired_velocity;
-    } else {
-        linvel.0 *= settings.velocity_damping;
-        if linvel.0.length_squared() < 1e-4 {
-            linvel.0 = Vec3::ZERO;
-        }
+    // ── Rotation: direct, instant response (precise aim), applied in the ship's
+    // local frame so pitch/yaw/roll compose freely with no gimbal lock. ──
+    let yaw = accum.yaw;
+    let pitch = accum.pitch;
+    accum.yaw = 0.0;
+    accum.pitch = 0.0;
+
+    let mut roll = 0.0;
+    if keys.pressed(KeyCode::KeyQ) {
+        roll += settings.roll_rate * dt;
+    }
+    if keys.pressed(KeyCode::KeyE) {
+        roll -= settings.roll_rate * dt;
     }
 
-    if let Some(target) = input.heading_target {
-        if !is_heading_aligned(rotation.0, target) {
-            let t = (settings.turn_slerp_rate * time.delta_secs()).min(1.0);
-            rotation.0 = rotation.0.slerp(target, t);
-            ang_vel.0 = Vec3::ZERO;
+    let delta_rotation = Quat::from_axis_angle(Vec3::X, pitch)
+        * Quat::from_axis_angle(Vec3::Z, roll)
+        * Quat::from_axis_angle(Vec3::Y, yaw);
+    rotation.0 = (rotation.0 * delta_rotation).normalize();
+
+    // The ship's facing is fully player-controlled; don't let physics spin it.
+    angvel.0 = Vec3::ZERO;
+
+    // ── Translation: ship-local thrust with acceleration/inertia. ──
+    let mut local_dir = Vec3::ZERO;
+    if keys.pressed(KeyCode::KeyW) {
+        local_dir.z -= 1.0;
+    }
+    if keys.pressed(KeyCode::KeyS) {
+        local_dir.z += 1.0;
+    }
+    if keys.pressed(KeyCode::KeyD) {
+        local_dir.x += 1.0;
+    }
+    if keys.pressed(KeyCode::KeyA) {
+        local_dir.x -= 1.0;
+    }
+    if keys.pressed(KeyCode::Space) {
+        local_dir.y += 1.0;
+    }
+    if keys.pressed(KeyCode::KeyC) {
+        local_dir.y -= 1.0;
+    }
+
+    let boost = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
+    let max_speed = settings.max_linear_speed * if boost { settings.boost_multiplier } else { 1.0 };
+
+    if local_dir.length_squared() > 0.0 {
+        let world_dir = rotation.0 * local_dir.normalize();
+        linvel.0 += world_dir * settings.linear_acceleration * dt;
+        if linvel.0.length() > max_speed {
+            linvel.0 = linvel.0.normalize() * max_speed;
+        }
+    } else {
+        linvel.0 *= (-settings.linear_damping * dt).exp();
+        if linvel.0.length_squared() < 1e-4 {
+            linvel.0 = Vec3::ZERO;
         }
     }
 }
 
 // ── Camera ───────────────────────────────────────────────────────────────────
 
-fn update_third_person_camera(
+fn update_chase_camera(
     settings: Res<ControllerSettings>,
-    camera_state: Res<CameraState>,
     player: Query<&Transform, With<Player>>,
     mut camera: Query<&mut Transform, (With<MainCamera>, Without<Player>)>,
 ) {
@@ -266,34 +197,9 @@ fn update_third_person_camera(
         return;
     };
 
-    let rot = camera_rotation(&camera_state);
-    let forward = rot * Vec3::NEG_Z;
-
-    camera_transform.translation = player_transform.translation
-        - forward * settings.follow_distance
-        + Vec3::Y * settings.follow_height;
-    camera_transform.rotation = rot;
-}
-
-// ── Math helpers ─────────────────────────────────────────────────────────────
-
-fn camera_rotation(state: &CameraState) -> Quat {
-    Quat::from_euler(EulerRot::YXZ, state.yaw, state.pitch, 0.0)
-}
-
-fn heading_from_forward(forward: Vec3) -> Quat {
-    let dir = forward.normalize_or_zero();
-    if dir.length_squared() < 1e-6 {
-        return Quat::IDENTITY;
-    }
-    let up = if dir.y.abs() > 0.99 { Vec3::X } else { Vec3::Y };
-    Transform::from_translation(Vec3::ZERO)
-        .looking_to(dir, up)
-        .rotation
-}
-
-fn is_heading_aligned(current: Quat, target: Quat) -> bool {
-    current.dot(target).abs() >= HEADING_ALIGNED_DOT
+    let offset = Vec3::new(0.0, settings.follow_height, settings.follow_distance);
+    camera_transform.translation = player_transform.translation + player_transform.rotation * offset;
+    camera_transform.rotation = player_transform.rotation;
 }
 
 #[cfg(test)]
@@ -301,21 +207,31 @@ mod tests {
     use super::*;
 
     #[test]
-    fn diagonal_input_normalizes() {
-        let rot = camera_rotation(&CameraState::default());
-        let forward = rot * Vec3::NEG_Z;
-        let right = rot * Vec3::X;
-        let mut direction = forward + right;
-        direction = direction.normalize();
-        assert!((direction.length() - 1.0).abs() < 1e-5);
+    fn local_rotation_delta_yaws_around_ship_up() {
+        let rotation = Quat::IDENTITY;
+        let delta = Quat::from_axis_angle(Vec3::Y, 0.5);
+        let result = (rotation * delta).normalize();
+        // Yawing from identity should rotate the forward vector in the XZ plane only.
+        let forward = result * Vec3::NEG_Z;
+        assert!((forward.y).abs() < 1e-5);
     }
 
     #[test]
-    fn heading_from_forward_faces_neg_z() {
-        let heading = heading_from_forward(Vec3::NEG_Z);
-        let expected = Transform::from_translation(Vec3::ZERO)
-            .looking_to(Vec3::NEG_Z, Vec3::Y)
-            .rotation;
-        assert!(heading.dot(expected).abs() > 0.999);
+    fn thrust_direction_is_normalized_before_scaling() {
+        let mut local_dir = Vec3::ZERO;
+        local_dir.z -= 1.0;
+        local_dir.x += 1.0;
+        let normalized = local_dir.normalize();
+        assert!((normalized.length() - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn velocity_clamps_to_max_speed() {
+        let mut v = Vec3::new(0.0, 0.0, -50.0);
+        let max_speed = 20.0;
+        if v.length() > max_speed {
+            v = v.normalize() * max_speed;
+        }
+        assert!((v.length() - max_speed).abs() < 1e-5);
     }
 }
