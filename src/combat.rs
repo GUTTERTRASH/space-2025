@@ -7,6 +7,9 @@ use bevy_egui::egui;
 use metrics::counter;
 use metrics::gauge;
 use metrics::histogram;
+use rand::Rng;
+
+use crate::weapons::HitDetectionSet;
 
 #[derive(Component, Clone, Copy, PartialEq, Debug, Reflect)]
 #[reflect(Component)]
@@ -50,6 +53,62 @@ pub struct AiMarker;
 pub struct Ship {
     pub health: f32,
     pub max_health: f32,
+    pub mass: f32,
+}
+
+/// A brief physical stagger applied on a non-lethal hit: AI control is
+/// suspended (see `action_system`'s `Without<Staggered>` filter) so the
+/// knockback velocity from `weapons::handle_projectile_hits` can actually
+/// show instead of being overwritten the same frame.
+#[derive(Component)]
+pub struct Staggered {
+    timer: Timer,
+    angular_velocity: Vec3,
+}
+
+impl Staggered {
+    pub fn new(duration: f32, angular_kick: f32) -> Self {
+        let mut rng = rand::thread_rng();
+        let axis = Vec3::new(
+            rng.gen_range(-1.0..1.0),
+            rng.gen_range(-1.0..1.0),
+            rng.gen_range(-1.0..1.0),
+        )
+        .normalize_or_zero();
+        Self {
+            timer: Timer::from_seconds(duration, TimerMode::Once),
+            angular_velocity: axis * rng.gen_range(0.0..angular_kick),
+        }
+    }
+}
+
+/// Fired when a `Ship`'s health drops to zero, in place of despawning
+/// silently. `vfx::spawn_death_explosion` listens for this.
+#[derive(Message, Event, Clone, Copy)]
+pub struct ShipDestroyed {
+    pub position: Vec3,
+}
+
+#[derive(Resource)]
+pub struct CombatSettings {
+    pub stagger_duration: f32,
+    /// Exponential decay rate (per second) applied to a staggered ship's
+    /// leftover velocity — same style as `ControllerSettings::linear_damping`.
+    pub stagger_linear_damping: f32,
+    /// Max rad/s of the random tumble applied on stagger.
+    pub stagger_angular_kick: f32,
+    pub evade_speed: f32,
+}
+
+impl Default for CombatSettings {
+    fn default() -> Self {
+        Self {
+            stagger_duration: 0.8,
+            stagger_linear_damping: 2.0,
+            stagger_angular_kick: 3.0,
+            evade_speed: 22.0,
+        }
+    }
 }
 
 
@@ -78,6 +137,8 @@ impl Plugin for CombatPlugin {
         app
             .init_resource::<DebugAiViz>()
             .init_resource::<AiEnabled>()
+            .init_resource::<CombatSettings>()
+            .add_message::<ShipDestroyed>()
             .register_type::<AiAction>()
             .register_type::<Thinker>()
             .add_systems(PreUpdate, (
@@ -85,7 +146,14 @@ impl Plugin for CombatPlugin {
                 range_scorer_system,
             ).in_set(AiSet::Scorers).run_if(resource_equals(AiEnabled(true))))
             .add_systems(PreUpdate, picker_system.in_set(AiSet::Pickers).run_if(resource_equals(AiEnabled(true))))
-            .add_systems(Update, action_system.in_set(AiSet::Actions).run_if(resource_equals(AiEnabled(true))))
+            .add_systems(
+                Update,
+                action_system
+                    .in_set(AiSet::Actions)
+                    .after(HitDetectionSet)
+                    .run_if(resource_equals(AiEnabled(true))),
+            )
+            .add_systems(Update, stagger_decay_system)
             .add_systems(Update, toggle_ai_viz)
             .add_systems(Update, toggle_ai_enabled)
             .add_systems(EguiPrimaryContextPass, ai_debug_dashboard)
@@ -202,8 +270,9 @@ fn picker_system(
 
 
 fn action_system(
-    mut query: Query<(&Thinker, &mut Transform, &mut LinearVelocity), With<AiMarker>>,
+    mut query: Query<(&Thinker, &mut Transform, &mut LinearVelocity), (With<AiMarker>, Without<Staggered>)>,
     enemies: Query<&Transform, (With<AiEnemy>, Without<AiMarker>)>,
+    settings: Res<CombatSettings>,
     _time: Res<Time>,
 ) {
     // Collect enemy positions (simple & easy to understand for first pass).
@@ -211,17 +280,24 @@ fn action_system(
     let enemy_positions: Vec<Vec3> = enemies.iter().map(|t| t.translation).collect();
 
     for (thinker, mut transform, mut linvel) in &mut query {
-        if thinker.current_action == AiAction::SeekTarget && !enemy_positions.is_empty() {
-            // Find closest threat (same approach as the scorers for conceptual simplicity)
-            if let Some(&closest) = enemy_positions.iter().min_by(|a, b| {
-                transform
-                    .translation
-                    .distance_squared(**a)
-                    .partial_cmp(&transform.translation.distance_squared(**b))
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            }) {
-                let dir = (closest - transform.translation).normalize_or_zero();
+        if enemy_positions.is_empty() {
+            continue;
+        }
 
+        // Closest threat (same approach as the scorers for conceptual simplicity)
+        let Some(&closest) = enemy_positions.iter().min_by(|a, b| {
+            transform
+                .translation
+                .distance_squared(**a)
+                .partial_cmp(&transform.translation.distance_squared(**b))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        }) else {
+            continue;
+        };
+
+        match thinker.current_action {
+            AiAction::SeekTarget => {
+                let dir = (closest - transform.translation).normalize_or_zero();
                 // Face the threat — very satisfying in arcade space combat
                 transform.look_at(closest, Vec3::Y);
 
@@ -229,16 +305,50 @@ fn action_system(
                 const SEEK_SPEED: f32 = 18.0;
                 **linvel = dir * SEEK_SPEED;
 
-                info!("AI SeekTarget active — moving toward closest threat at speed {}", SEEK_SPEED);
-
                 // TODO (p1-3): arrival / slowing when close so they don't overshoot the player
             }
+            AiAction::Evade => {
+                // Run: face and fly straight away from the nearest threat.
+                // Its score is zero at full health and only rises as the
+                // ship takes damage (see threat_scorer_system), so this
+                // naturally reads as "fleeing after getting hit".
+                let away = (transform.translation - closest).normalize_or_zero();
+                let evade_point = transform.translation + away * 10.0;
+                transform.look_at(evade_point, Vec3::Y);
+                **linvel = away * settings.evade_speed;
+            }
+            AiAction::Idle | AiAction::Fire => {
+                // TODO: Fire — face target + trigger shooting.
+                // Idle — maybe apply light damping so they don't drift forever.
+            }
+        }
+    }
+}
+
+/// Decays a staggered ship's leftover velocity/tumble and hands control
+/// back to `action_system` once the stagger window ends. Runs regardless
+/// of `AiEnabled` — a hit reaction shouldn't depend on the AI debug toggle.
+fn stagger_decay_system(
+    mut commands: Commands,
+    time: Res<Time>,
+    settings: Res<CombatSettings>,
+    mut query: Query<(Entity, &mut Staggered, &mut Transform, &mut LinearVelocity)>,
+) {
+    let dt = time.delta_secs();
+    for (entity, mut staggered, mut transform, mut linvel) in &mut query {
+        let decay = (-settings.stagger_linear_damping * dt).exp();
+        **linvel *= decay;
+
+        let angular_velocity = staggered.angular_velocity * decay;
+        staggered.angular_velocity = angular_velocity;
+        if angular_velocity.length_squared() > 1e-6 {
+            transform.rotation =
+                (transform.rotation * Quat::from_scaled_axis(angular_velocity * dt)).normalize();
         }
 
-        // TODO (future actions):
-        // Evade: steer away or perpendicular when threat high
-        // Fire: face target + trigger shooting (will need commands or events)
-        // Idle / other: maybe apply light damping so they don't drift forever
+        if staggered.timer.tick(time.delta()).is_finished() {
+            commands.entity(entity).remove::<Staggered>();
+        }
     }
 }
 
@@ -399,6 +509,43 @@ fn ai_debug_dashboard(
             }
         });
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stagger_linear_damping_trends_toward_zero() {
+        let mut velocity = Vec3::new(10.0, 0.0, 0.0);
+        let damping_rate: f32 = 2.0;
+        let dt: f32 = 1.0 / 60.0;
+        for _ in 0..120 {
+            velocity *= (-damping_rate * dt).exp();
+        }
+        assert!(velocity.length() < 1.0);
+    }
+
+    #[test]
+    fn evade_direction_points_away_from_threat() {
+        let ship_pos = Vec3::new(5.0, 0.0, 0.0);
+        let threat_pos = Vec3::ZERO;
+        let away = (ship_pos - threat_pos).normalize_or_zero();
+        // Moving along `away` should increase distance from the threat.
+        let next_pos = ship_pos + away;
+        assert!(next_pos.distance(threat_pos) > ship_pos.distance(threat_pos));
+    }
+
+    #[test]
+    fn knockback_impulse_scales_inversely_with_mass() {
+        let projectile_velocity = Vec3::new(0.0, 0.0, -100.0);
+        let projectile_mass = 3.0;
+        let impulse = projectile_velocity * projectile_mass;
+
+        let light_kick = impulse / 1.0;
+        let heavy_kick = impulse / 10.0;
+        assert!(light_kick.length() > heavy_kick.length());
+    }
 }
 
 

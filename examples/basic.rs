@@ -9,9 +9,10 @@ use space::combat::*;
 use space::common::{Enemy, MainCamera, Player};
 // use space::movement::MovementPlugin; // replaced by ControllerPlugin
 use space::controller::ControllerPlugin;
-use space::projectile::ProjectilePlugin;
 use space::reticule::ReticulePlugin;
 use space::utils::generate_targets;
+use space::vfx::VfxPlugin;
+use space::weapons::{WeaponLoadout, WeaponsPlugin};
 
 use avian3d::prelude::*;
 
@@ -32,7 +33,8 @@ fn main() {
             PhysicsPickingPlugin,
             ReticulePlugin,
             ControllerPlugin,
-            ProjectilePlugin,
+            WeaponsPlugin,
+            VfxPlugin,
             CombatPlugin,
             EguiPlugin::default(),
             WorldInspectorPlugin::default()
@@ -84,6 +86,7 @@ fn spawn_player(
         RigidBody::Dynamic,
         ColliderConstructor::TrimeshFromMesh,
         AiEnemy,
+        WeaponLoadout::default(),
         // Note: LinearVelocity + AngularVelocity are provided automatically by the Dynamic rigidbody.
     ));
 }
@@ -121,7 +124,7 @@ fn spawn_targets(
                 Transform::from_translation(position).with_scale(Vec3::new(0.1, 0.1, 0.5)),
                 Target,
                 AiMarker,
-                Ship { health: 100.0, max_health: 100.0 },
+                Ship { health: 100.0, max_health: 100.0, mass: 5.0 },
                 Thinker { threshold: 0.3, ..default() },
                 ThreatScore::default(),
                 RangeScore::default(),
@@ -129,6 +132,7 @@ fn spawn_targets(
                 // Lightweight kinematic for scale (100s of enemies possible).
                 // Player stays full Dynamic + Trimesh for feel. See physics decision in todos.
                 RigidBody::Kinematic,
+                Collider::sphere(0.5),
                 LinearVelocity::default(),
                 // Approaching {
                 //     target: player,
