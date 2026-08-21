@@ -2,8 +2,8 @@
 //!
 //! - Mouse freely orbits the camera around the player (independent of ship orientation).
 //! - WASD + Q/E provide 6DOF thrust along camera axes.
-//! - W/S commit heading to the camera look direction, slerp the ship, and thrust forward/back.
-//! - A/D commit the same heading, slerp the ship, then strafe once aligned.
+//! - W/S continuously slerp toward the live camera look direction and thrust forward/back.
+//! - A/D commit heading on press, slerp the ship, then strafe once aligned.
 
 use bevy::input::mouse::MouseMotion;
 use bevy::prelude::*;
@@ -89,7 +89,7 @@ struct ShipInput {
     thrusting: bool,
 }
 
-/// Camera heading captured when W, S, A, or D is first pressed.
+/// Camera heading captured when A or D is first pressed (strafe turn-then-slide).
 #[derive(Resource, Default)]
 struct CommittedHeading {
     forward: Option<Vec3>,
@@ -141,9 +141,8 @@ fn gather_input(
 
     let forward_back = keys.pressed(KeyCode::KeyW) || keys.pressed(KeyCode::KeyS);
     let strafe = keys.pressed(KeyCode::KeyA) || keys.pressed(KeyCode::KeyD);
-    let heading_keys = forward_back || strafe;
 
-    if !heading_keys {
+    if !strafe {
         committed.forward = None;
         committed.right = None;
         committed.rotation = None;
@@ -165,48 +164,46 @@ fn gather_input(
     let cam_right = camera_basis * Vec3::X;
     let cam_up = Vec3::Y;
 
-    let just_committed = keys.just_pressed(KeyCode::KeyW)
-        || keys.just_pressed(KeyCode::KeyS)
-        || keys.just_pressed(KeyCode::KeyA)
-        || keys.just_pressed(KeyCode::KeyD);
-
-    if heading_keys && just_committed {
+    if strafe && (keys.just_pressed(KeyCode::KeyA) || keys.just_pressed(KeyCode::KeyD)) {
         let heading = heading_from_forward(cam_forward);
         committed.forward = Some(cam_forward);
         committed.right = Some(heading * Vec3::X);
         committed.rotation = Some(heading);
     }
 
-    let forward = committed.forward.unwrap_or(cam_forward);
-    let right = committed.right.unwrap_or(cam_right);
-    let up = cam_up;
+    let strafe_right = committed.right.unwrap_or(cam_right);
 
-    let aligned = committed
+    let strafe_aligned = committed
         .rotation
         .and_then(|target| player.single().ok().map(|p| is_heading_aligned(p.rotation, target)))
         .unwrap_or(false);
 
     let mut direction = Vec3::ZERO;
     if keys.pressed(KeyCode::KeyW) {
-        direction += forward;
+        direction += cam_forward;
     }
     if keys.pressed(KeyCode::KeyS) {
-        direction -= forward;
+        direction -= cam_forward;
     }
-    // Strafe only after the ship has turned to face the committed camera heading.
-    if strafe && aligned {
-        if keys.pressed(KeyCode::KeyD) {
-            direction += right;
+    if keys.pressed(KeyCode::KeyD) {
+        if forward_back {
+            direction += cam_right;
+        } else if strafe_aligned {
+            direction += strafe_right;
         }
-        if keys.pressed(KeyCode::KeyA) {
-            direction -= right;
+    }
+    if keys.pressed(KeyCode::KeyA) {
+        if forward_back {
+            direction -= cam_right;
+        } else if strafe_aligned {
+            direction -= strafe_right;
         }
     }
     if keys.pressed(KeyCode::KeyE) {
-        direction += up;
+        direction += cam_up;
     }
     if keys.pressed(KeyCode::KeyQ) {
-        direction -= up;
+        direction -= cam_up;
     }
 
     let sprint = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
@@ -217,7 +214,9 @@ fn gather_input(
         input.thrusting = true;
     }
 
-    if heading_keys {
+    if forward_back {
+        input.heading_target = Some(heading_from_forward(cam_forward));
+    } else if strafe {
         input.heading_target = committed.rotation;
     }
 }
